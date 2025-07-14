@@ -24,4 +24,4 @@ project/
 uvicorn main:app --reload
 4. Start ngrok:
 ngrok http 8000
-5. Paste the ngrok link in Vapi assistant’s tool call URL
+5. Paste the ngrok link in Vapi assistant’s tool call URL.. 
