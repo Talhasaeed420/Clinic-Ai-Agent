@@ -1,27 +1,36 @@
-## Technologies Used
+Voice Assistant Project – Clinic Appointments + Call Center
+(Using Vapi AI + FastAPI + MongoDB)
 
-- **FastAPI** – Backend framework
-- **Vapi AI** – Voice assistant platform
-- **MongoDB** – Database for storing appointments
-- **Ngrok** – Tunneling tool to make local server public
-- **Pydantic** – Data validation
-- **httpx** – Async HTTP client for Vapi call trigger
+Overview:
+This project is a dual-purpose voice assistant that allows users to interact via phone calls for two types of services:
+1. Clinic Appointment Booking
+2. AC Support and Service
 
-Project Structure
+Tech Stack:
+- Vapi AI (Voice AI tool)
+- FastAPI (Python backend framework)
+- MongoDB (for storing customer & appointment data)
+- Ngrok (for exposing localhost to Vapi)
 
-project/
-│
-├── main.py # FastAPI app & routes
-├── models.py # Pydantic models for validation
-├── database.py # MongoDB connection & lifespan setup
-├── .env # API keys and DB URIs
+Use Case Flow:
 
-## How to Run
+1️⃣ Start Call:
+Vapi prompts:
+“Welcome! Are you calling for a doctor appointment or AC support today?”
 
-1. Extract zip file.
-2. Add your `.env` file with Vapi API key, Assistant ID, Mongo URI
-3. Run the FastAPI app
-uvicorn main:app --reload
-4. Start ngrok:
-ngrok http 8000
-5. Paste the ngrok link in Vapi assistant’s tool call URL.
+2️⃣ If user says "Doctor Appointment":
+   - Assistant asks for name, date, and time.
+   - Data is sent to `/book_appointment` FastAPI endpoint.
+   - Response confirms: “Your appointment has been booked.”
+
+3️⃣ If user says "AC Support":
+   - Assistant asks what kind of help is needed:
+     - Purchase details
+     - Warranty info
+     - Schedule service
+     - Troubleshooting
+   - For purchase details:
+     - Assistant asks for customer ID
+     - Data sent to `/get_ac_purchase_details?customer_id=XYZ`
+     - Response: purchase info or "no result found"
+

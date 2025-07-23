@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 MONGODB_URI = os.getenv("MONGODB_URI")
-DB_NAME = "voicebot"
+DB_NAME = "voicebot_db"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
