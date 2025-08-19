@@ -18,6 +18,7 @@ def parse_datetime(raw_time: str) -> datetime:
     dt = dateparse(
         raw_time,
         settings={
+            "PREFER_DATES_FROM": "future",
             "RETURN_AS_TIMEZONE_AWARE": True,
             "TIMEZONE": "UTC",
             "TO_TIMEZONE": "UTC",
@@ -27,13 +28,11 @@ def parse_datetime(raw_time: str) -> datetime:
     if not dt:
         raise ValueError(f"❌ Cannot parse appointment_time: {raw_time}")
 
-    # Normalize both times to minute precision
     now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
     dt = dt.replace(second=0, microsecond=0)
 
-    # Reject any past or equal times (year, month, day, or time)
-    if dt <= now:
-        raise ValueError(f"❌ Invalid appointment_time: {raw_time}. Past or current dates are not allowed.")
+    if dt < now:
+        raise ValueError(f"❌ Invalid appointment_time: {raw_time}. Past dates are not allowed.")
 
     return dt
 
@@ -42,10 +41,6 @@ def parse_datetime(raw_time: str) -> datetime:
 @router.post("/appointments", response_model=Appointment)
 async def create_appointment(appointment: Appointment, request: Request):
     db = await get_database(request)
-
-    # Validate appointment_time if it's a string
-    if isinstance(appointment.appointment_time, str):
-        appointment.appointment_time = parse_datetime(appointment.appointment_time)
 
     existing = await db.appointments.find_one({
         "$or": [
@@ -100,9 +95,6 @@ async def update_appointment(appointment_id: str, appointment_update: Appointmen
     db = await get_database(request)
     update_data = {k: v for k, v in appointment_update.dict().items() if v is not None}
 
-    if "appointment_time" in update_data:
-        update_data["appointment_time"] = parse_datetime(update_data["appointment_time"])
-
     if not update_data:
         raise HTTPException(**ERRORS["NO_FIELDS_TO_UPDATE"])
 
@@ -147,9 +139,10 @@ async def handle_vapi_tool_call(request: Request):
         try:
             if "appointment_time" in parameters:
                 raw_time = parameters["appointment_time"]
-                parameters["appointment_time"] = parse_datetime(raw_time)
+                dt = parse_datetime(raw_time)
+                parameters["appointment_time"] = dt
             else:
-                raise ValueError("❌ Missing appointment_time")
+                parameters["appointment_time"] = datetime.now(timezone.utc).replace(second=0, microsecond=0)
 
             existing = await db.appointments.find_one({
                 "$or": [
@@ -184,7 +177,8 @@ async def handle_vapi_tool_call(request: Request):
         try:
             if "appointment_time" in parameters:
                 raw_time = parameters["appointment_time"]
-                time = parse_datetime(raw_time)
+                dt = parse_datetime(raw_time)
+                time = dt
             else:
                 return {"status": "error", "message": ERRORS["MISSING_APPOINTMENT_TIME"]["detail"]}
 

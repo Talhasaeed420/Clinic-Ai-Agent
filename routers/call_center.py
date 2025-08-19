@@ -7,15 +7,14 @@ from database import get_database
 import os
 import httpx
 from datetime import datetime, timedelta
-
+from .insertcallcenter import insert_sample_data_to_db 
 from constant import ERRORS, SUCCESS  
+from workhrs import WORK_START_HOUR, WORK_END_HOUR
 
 router = APIRouter()
 
 VAPI_API_KEY = os.getenv("VAPI_API_KEY")
 
-WORK_START_HOUR = 9   # 9 AM
-WORK_END_HOUR = 18    # 6 PM
 
 
 @router.post("/get_ac_purchase_details")
@@ -108,71 +107,11 @@ async def handle_vapi_events(request: Request):
     return SUCCESS["IGNORED"]
 
 
-@router.post("/call-center/start-call/")
-async def start_call_center_call(phone_number: str):
-    url = "https://api.vapi.ai/v1/conversations"
-    headers = {
-        "Authorization": f"Bearer {os.getenv('VAPI_API_KEY')}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "phone_number": phone_number,
-        "assistant_id": os.getenv("VAPI_ASSISTANT_ID")
-    }
-    async with httpx.AsyncClient() as client:
-        response = await client.post(url, headers=headers, json=payload)
-        if response.status_code != 200:
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=response.text or ERRORS["VAPI_REQUEST_FAILED"]["detail"]
-            )
-        return response.json()
-
-
 @router.post("/insert-sample-data")
-async def insert_sample_data():
+async def insert_sample_data_route():
     db = await get_database_from_call_center()
-
-    await db.purchases.delete_many({"customer_id": {"$in": [12, 56]}})
-    await db.warranties.delete_many({"product_id": {"$in": [45, 44, 99, 98]}})
-
-    await db.purchases.insert_many([
-        {
-            "customer_id": 12,
-            "name": "Samreen Habib",
-            "product_type": "AC",
-            "product_model": "PEL Inverter 12000BTU",
-            "product_id": 45,
-            "purchase_date": "2025-07-01",
-            "warranty_status": "Active"
-        },
-        {
-            "customer_id": 56,
-            "name": "Ali Raza",
-            "product_type": "AC",
-            "product_model": "Sharp CoolPro 1.5Ton",
-            "product_id": 44,
-            "purchase_date": "2025-06-25",
-            "warranty_status": "Active"
-        }
-    ])
-
-    await db.warranties.insert_many([
-        {
-            "product_id": 45,
-            "expiry_date": "2025-12-01",
-            "coverage_details": "Covers parts and labor for manufacturing defects"
-        },
-        {
-            "product_id": 44,
-            "expiry_date": "2026-06-25",
-            "coverage_details": "Full coverage including compressor and gas refill"
-        }
-    ])
-
-    return SUCCESS["SAMPLE_DATA_INSERTED"]
-
-
+    result = await insert_sample_data_to_db(db)
+    return {"message": result}
 async def get_database_from_call_center():
     client = AsyncIOMotorClient(os.getenv("MONGODB_URI"))
     return client[os.getenv("DB_NAME")]

@@ -1,6 +1,15 @@
 fastapi==0.115.0
+dateparser==1.1.6
 motor==3.6.0
 pydantic==2.9.2
 uvicorn==0.32.0
 python-dotenv==1.0.1
 httpx==0.23.0
+#These are the requirements needed to install before moving towards code running
+
+
+
+# For anyone looking to understand the code better
+# The workhrs file is actually the main working hours used in call center py file 
+# And please run insert sample data before moving towards warranty checking 
+# Clinic and call center file have no link you can delete any just change the code from main 
