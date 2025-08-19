@@ -34,3 +34,18 @@ Vapi prompts:
      - Data sent to `/get_ac_purchase_details?customer_id=XYZ`
      - Response: purchase info or "no result found"
 
+
+
+Steps for uvicorn (virtual env)
+
+1) make the environment
+	python -m venv .venv
+    
+2) active the environment
+	.\.venv\Scripts\activate
+
+3) install the dependencies
+	python -m pip install -r requirements.txt
+
+4) run the server
+   uvicorn main:app --reload
