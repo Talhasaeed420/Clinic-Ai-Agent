@@ -6,10 +6,17 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from database import get_database
 import os
 import httpx
+from datetime import datetime, timedelta
+
+from constant import ERRORS, SUCCESS  
 
 router = APIRouter()
 
 VAPI_API_KEY = os.getenv("VAPI_API_KEY")
+
+WORK_START_HOUR = 9   # 9 AM
+WORK_END_HOUR = 18    # 6 PM
+
 
 @router.post("/get_ac_purchase_details")
 async def get_ac_purchase_details(customer_id: int = Query(...)) -> ACPurchaseDetails:
@@ -20,7 +27,8 @@ async def get_ac_purchase_details(customer_id: int = Query(...)) -> ACPurchaseDe
     )
     if purchase:
         return ACPurchaseDetails(**purchase)
-    raise HTTPException(status_code=404, detail="No AC purchase found")
+    raise HTTPException(**ERRORS["NO_AC_PURCHASE"])
+
 
 @router.post("/get_warranty_info")
 async def get_warranty_info(product_id: int) -> WarrantyInfo:
@@ -28,20 +36,42 @@ async def get_warranty_info(product_id: int) -> WarrantyInfo:
     warranty = await db.warranties.find_one({"product_id": product_id})
     if warranty:
         return WarrantyInfo(**warranty)
-    raise HTTPException(status_code=404, detail="Warranty info not found")
+    raise HTTPException(**ERRORS["NO_WARRANTY_INFO"])
+
 
 @router.post("/schedule_service_visit")
 async def schedule_service_visit(customer_id: int, product_id: int) -> ServiceVisit:
     db = await get_database_from_call_center()
-    visit_date = "2025-07-20"
-    time = "10:00 AM"
-    await db.service_visits.insert_one({
-        "customer_id": customer_id,
-        "product_id": product_id,
-        "visit_date": visit_date,
-        "time": time
-    })
-    return ServiceVisit(visit_date=visit_date, time=time)
+    now = datetime.now()
+    date_cursor = now.replace(minute=0, second=0, microsecond=0)
+
+    while True:
+        for hour in range(WORK_START_HOUR, WORK_END_HOUR):
+            candidate = date_cursor.replace(hour=hour)
+
+            if candidate <= now:
+                continue
+
+            existing = await db.service_visits.find_one({
+                "visit_date": candidate.strftime("%Y-%m-%d"),
+                "time": candidate.strftime("%I:%M %p")
+            })
+
+            if not existing:
+                visit_date = candidate.strftime("%Y-%m-%d")
+                time = candidate.strftime("%I:%M %p")
+
+                await db.service_visits.insert_one({
+                    "customer_id": customer_id,
+                    "product_id": product_id,
+                    "visit_date": visit_date,
+                    "time": time
+                })
+
+                return ServiceVisit(visit_date=visit_date, time=time)
+
+        date_cursor = (date_cursor + timedelta(days=1)).replace(hour=WORK_START_HOUR)
+
 
 @router.post("/get_troubleshooting_steps")
 async def get_troubleshooting_steps(issue_description: str) -> TroubleshootingSteps:
@@ -51,6 +81,7 @@ async def get_troubleshooting_steps(issue_description: str) -> TroubleshootingSt
         "Reset the unit by turning it off and on."
     ]
     return TroubleshootingSteps(steps=steps)
+
 
 @router.post("/vapi-events")
 async def handle_vapi_events(request: Request):
@@ -72,9 +103,10 @@ async def handle_vapi_events(request: Request):
     elif data.get("type") == "end_of_call" and data.get("call"):
         db = await get_database_from_call_center()
         await db.calls.insert_one(data["call"])
-        return {"status": "call_log_saved"}
+        return SUCCESS["CALL_LOG_SAVED"]
 
-    return {"status": "ignored"}
+    return SUCCESS["IGNORED"]
+
 
 @router.post("/call-center/start-call/")
 async def start_call_center_call(phone_number: str):
@@ -90,18 +122,20 @@ async def start_call_center_call(phone_number: str):
     async with httpx.AsyncClient() as client:
         response = await client.post(url, headers=headers, json=payload)
         if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=response.text or ERRORS["VAPI_REQUEST_FAILED"]["detail"]
+            )
         return response.json()
+
 
 @router.post("/insert-sample-data")
 async def insert_sample_data():
     db = await get_database_from_call_center()
 
-    # Delete old sample data if exists
     await db.purchases.delete_many({"customer_id": {"$in": [12, 56]}})
     await db.warranties.delete_many({"product_id": {"$in": [45, 44, 99, 98]}})
 
-    # Insert purchases with numeric product_ids
     await db.purchases.insert_many([
         {
             "customer_id": 12,
@@ -123,7 +157,6 @@ async def insert_sample_data():
         }
     ])
 
-    # Insert warranties linked to product_ids
     await db.warranties.insert_many([
         {
             "product_id": 45,
@@ -137,8 +170,9 @@ async def insert_sample_data():
         }
     ])
 
-    return {"message": "Sample data inserted"}
+    return SUCCESS["SAMPLE_DATA_INSERTED"]
+
 
 async def get_database_from_call_center():
     client = AsyncIOMotorClient(os.getenv("MONGODB_URI"))
-    return client[os.getenv("DB_NAME")]  # use DB_NAME from env
+    return client[os.getenv("DB_NAME")]
