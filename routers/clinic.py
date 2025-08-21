@@ -169,6 +169,10 @@ async def get_assistant_config(request: Request):
     config = await db.bot_configs.find_one({}, {"_id": 0})
     if not config:
         raise HTTPException(status_code=404, detail="Assistant configuration not found")
+    
+    # Log what you're sending to Vapi
+    print("Sending config to Vapi:", json.dumps(config, indent=2))
+    
     return config
 
 # ---------------- INSERT CLINIC BOT CONFIG ---------------- #
