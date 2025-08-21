@@ -8,21 +8,37 @@ load_dotenv()
 MONGODB_URI = os.getenv("MONGODB_URI")
 DB_NAME = os.getenv("DB_NAME")
 
-
 async def insert_clinic_bot_config(db):
     # Delete old config
     delete_result = await db.bot_configs.delete_many({"name": "clinic_assistant_bot"})
-
+    
+    # Config should be inside the function with proper indentation
     config = {
         "name": "clinic_assistant_bot",
-        "prompt": "You are a helpful AI assistant for a clinic. Greet patients warmly, help them book appointments, check availability, and answer basic queries politely.",
+        "model": {
+            "provider": "openai",
+            "model": "gpt-3.5-turbo",
+            "systemPrompt": (
+                "You are a friendly and helpful AI assistant for a clinic. "
+                "Greet patients warmly and ask how they are feeling. Politely inquire about the name for their appointment. "
+                "Help them book appointments, check doctor availability, and answer any basic questions about the clinic.\n\n"
+                "Make the conversation natural, empathetic, and human-like while staying professional. "
+                "Use the tools listed under tools when needed."
+            ),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Your system prompt here if needed"
+                }
+            ]
+        },
         "voice": {
-            "provider": "vapi",
-            "voice_id": "alloy",
-            "language": "en-US"
+            "provider": "vapi",  # lowercase
+            "voiceId": "Ava",  # camelCase instead of snake_case
         },
         "transcriber": {
-            "provider": "vapi",
+            "provider": "deepgram",  # lowercase
+            "model": "nova-2",  # add model field
             "language": "en"
         },
         "tools": [
@@ -51,23 +67,19 @@ async def insert_clinic_bot_config(db):
                     "required": ["doctor", "date"]
                 }
             }
-        ],
-        "headers": {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer 872a3945-34b0-40cb-8e90-5491d7c95f70"
-        }
+        ]
     }
-
+    
     result = await db.bot_configs.insert_one(config)
     return f"Deleted {delete_result.deleted_count} old config(s), inserted new config with ID: {result.inserted_id}"
 
 
-async def update_clinic_bot_config(db, new_config: dict):
-    result = await db.bot_configs.update_one(
-        {"name": "clinic_assistant_bot"},  # filter by bot name
-        {"$set": new_config}
-    )
+# Example usage:
+async def main():
+    client = AsyncIOMotorClient(MONGODB_URI)
+    db = client[DB_NAME]
+    result = await insert_clinic_bot_config(db)
+    print(result)
 
-    if result.matched_count == 0:
-        return "No existing clinic bot config found to update."
-    return f"Updated clinic bot config. Modified count: {result.modified_count}"
+if __name__ == "__main__":
+    asyncio.run(main())
