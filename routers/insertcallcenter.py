@@ -1,6 +1,6 @@
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
-from constant import ERRORS, SUCCESS
+from constants.constant import ERRORS, SUCCESS
 
 
 async def insert_sample_data_to_db(db):

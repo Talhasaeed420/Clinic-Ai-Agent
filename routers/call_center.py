@@ -8,8 +8,8 @@ import os
 import httpx
 from datetime import datetime, timedelta
 from .insertcallcenter import insert_sample_data_to_db 
-from constant import ERRORS, SUCCESS  
-from workhrs import WORK_START_HOUR, WORK_END_HOUR
+from constants.constant import ERRORS, SUCCESS  
+from constants.workhrs import WORK_START_HOUR, WORK_END_HOUR
 
 router = APIRouter()
 
