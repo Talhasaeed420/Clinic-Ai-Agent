@@ -7,5 +7,5 @@ from database import lifespan
 
 app = FastAPI(lifespan=lifespan)
 
-app.include_router(clinic.router, prefix="/api", tags=["Clinic"])
+app.include_router(clinic.router, tags=["Clinic"])
 app.include_router(call_center.router, tags=["Call Center"])

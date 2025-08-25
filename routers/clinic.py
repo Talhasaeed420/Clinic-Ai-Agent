@@ -11,9 +11,8 @@ import os
 import json
 from dateparser import parse as dateparse
 from datetime import datetime, timezone
-from clinic_configuration.clinic_bot_config import insert_clinic_bot_config, update_clinic_bot_config
-from models.calls import BotConfig, VapiCallReport
-from models.calls import CallAnalysis, CallArtifact, CostBreakdown, PerformanceMetrics, CallInfo, AssistantInfo
+from models.mainvapidata import BotConfig, VapiCallReport
+from models.mainvapidata import CallAnalysis, CallArtifact, CostBreakdown, PerformanceMetrics, CallInfo, AssistantInfo
 
 from constants.constant import ERRORS, SUCCESS
 
@@ -244,6 +243,8 @@ async def handle_vapi_tool_call(request: Request):
 
     logger.info("Unhandled tool call")
     return {"status": "ignored", "message": "Webhook event not handled"}
+
+
 
 
 # ---------------- GETTING ASSISTANT CONFIG FOR VAPI ---------------- #
