@@ -1,0 +1,82 @@
+2025-08-25 13:49:56,909 - INFO - log_setup - Logging to: D:\UNI\App Aura\voicebot-service\logging\app.log
+2025-08-25 13:49:57,786 - INFO - uvicorn.error - Started server process [32716]
+2025-08-25 13:49:57,787 - INFO - uvicorn.error - Waiting for application startup.
+2025-08-25 13:49:58,002 - INFO - database - MongoDB connected to voicebot_db
+2025-08-25 13:49:58,003 - INFO - uvicorn.error - Application startup complete.
+2025-08-25 13:50:18,942 - INFO - uvicorn.access - 2400:adc5:180:ad00:b5c5:5338:32c7:ea6b:0 - "GET / HTTP/1.1" 404
+2025-08-25 13:50:21,460 - INFO - uvicorn.access - 2400:adc5:180:ad00:b5c5:5338:32c7:ea6b:0 - "GET /docs HTTP/1.1" 200
+2025-08-25 13:50:21,724 - INFO - uvicorn.access - 2400:adc5:180:ad00:b5c5:5338:32c7:ea6b:0 - "GET /openapi.json HTTP/1.1" 200
+2025-08-25 13:50:35,171 - INFO - appointments - Fetched 4 appointments
+2025-08-25 13:50:35,171 - INFO - uvicorn.access - 2400:adc5:180:ad00:b5c5:5338:32c7:ea6b:0 - "GET /api/appointments HTTP/1.1" 200
+2025-08-25 13:50:46,169 - INFO - appointments - Sending config to Vapi: {
+  "name": "clinic_assistant_bot",
+  "model": {
+    "provider": "openai",
+    "model": "gpt-3.5-turbo",
+    "systemPrompt": "You are a friendly and helpful AI assistant for a clinic. Greet patients warmly and ask how they are feeling. Politely inquire about the name for their appointment. Help them book appointments, check doctor availability, and answer any basic questions about the clinic.\n\nMake the conversation natural, empathetic, and human-like while staying professional. Use the tools listed under tools when needed.",
+    "messages": [
+      {
+        "role": "system",
+        "content": "Your system prompt here if needed"
+      }
+    ]
+  },
+  "voice": {
+    "provider": "vapi",
+    "voiceId": "Ava"
+  },
+  "transcriber": {
+    "provider": "deepgram",
+    "model": "nova-2",
+    "language": "en"
+  },
+  "tools": [
+    {
+      "name": "book_appointment",
+      "description": "Book an appointment for a patient at the clinic.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "patient_name": {
+            "type": "string"
+          },
+          "preferred_date": {
+            "type": "string"
+          },
+          "doctor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "patient_name",
+          "preferred_date"
+        ]
+      }
+    },
+    {
+      "name": "check_availability",
+      "description": "Check a doctor's availability for a given date.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "doctor": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doctor",
+          "date"
+        ]
+      }
+    }
+  ]
+}
+2025-08-25 13:50:46,169 - INFO - uvicorn.access - 2400:adc5:180:ad00:b5c5:5338:32c7:ea6b:0 - "GET /api/bot-config HTTP/1.1" 200
+2025-08-25 13:51:00,539 - INFO - uvicorn.error - Shutting down
+2025-08-25 13:51:00,649 - INFO - uvicorn.error - Waiting for application shutdown.
+2025-08-25 13:51:00,768 - WARNING - database -  MongoDB disconnected.
+2025-08-25 13:51:00,769 - INFO - uvicorn.error - Application shutdown complete.
+2025-08-25 13:51:00,769 - INFO - uvicorn.error - Finished server process [32716]
