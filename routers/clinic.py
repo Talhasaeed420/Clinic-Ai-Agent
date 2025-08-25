@@ -10,7 +10,6 @@ import json
 from dateparser import parse as dateparse
 from datetime import datetime, timezone
 from clinic_configuration.clinic_bot_config import insert_clinic_bot_config, update_clinic_bot_config
-from models.bot_session import BotSession, VoiceConfig, TranscriberConfig
 from models.calls import VapiCallReport, BotConfig
 from models.calls import CallAnalysis, CallArtifact, CostBreakdown, PerformanceMetrics, CallInfo, AssistantInfo
 
@@ -115,29 +114,24 @@ async def handle_vapi_webhook(request: Request):
     body = await request.json()
     print("📩 Received VAPI webhook:", body)
 
-    try:
-        # Always log raw data (overwrite previous)
-        await db.callslog.delete_many({})  # clears old logs
-        result = await db.callslog.insert_one({
-            "body": body,
-            "receivedAt": datetime.utcnow()
-        })
-        print("✅ Raw webhook saved with id:", result.inserted_id)
-    except Exception as e:
-        print("❌ Failed to save raw webhook:", e)
-
     message = body.get("message", {})
 
+    # ✅ Only handle end-of-call-report
     if message.get("type") == "end-of-call-report":
         try:
             call_id = body.get("call", {}).get("id")
-            if not call_id:
-                return {"status": "error", "message": "❌ No call ID found"}
 
-            await db.calls.delete_one({"call.id": call_id})
+            # save raw data in callslog
+            await db.callslog.insert_one({
+                "body": body,
+                "receivedAt": datetime.utcnow()
+            })
 
+            # remove any existing call with same call_id
+            if call_id:
+                await db.calls.delete_one({"call.id": call_id})
 
-            # Save fresh data
+            # save structured call data
             call_data = {
                 "timestamp": message.get("timestamp"),
                 "type": message.get("type"),
@@ -153,16 +147,18 @@ async def handle_vapi_webhook(request: Request):
 
             return {
                 "status": "ok",
-                "message": "✅ Call report saved (replaced old one)",
+                "message": "✅ End-of-call report saved",
                 "call_id": call_id,
                 "inserted_id": str(result.inserted_id)
             }
 
         except Exception as e:
-            print("❌ Call report error:", e)
+            print("❌ Error saving end-of-call report:", e)
             return {"status": "error", "message": str(e)}
 
-    return {"status": "ignored", "message": "Webhook event not handled"}
+    # 🚫 Ignore everything else
+    return {"status": "ignored", "message": "Not an end-of-call-report"}
+
 
 
     # ---------------- TOOL CALL HANDLING ---------------- #
