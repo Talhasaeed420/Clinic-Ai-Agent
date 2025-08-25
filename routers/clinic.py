@@ -1,18 +1,22 @@
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Body
 from models.clinic import Appointment, AppointmentUpdate
 from database import get_database
 from typing import List
 from bson import ObjectId
+from fastapi.responses import JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import json
 from dateparser import parse as dateparse
 from datetime import datetime, timezone
-from clinic_bot_config import insert_clinic_bot_config
+from clinic_configuration.clinic_bot_config import insert_clinic_bot_config, update_clinic_bot_config
+from models.calls import VapiCallReport, BotConfig
+from models.calls import CallAnalysis, CallArtifact, CostBreakdown, PerformanceMetrics, CallInfo, AssistantInfo
+
 
 
 # Import constants
-from constant import ERRORS, SUCCESS
+from constants.constant import ERRORS, SUCCESS
 
 router = APIRouter()
 
@@ -103,19 +107,82 @@ async def update_appointment(appointment_id: str, appointment_update: Appointmen
     return Appointment(**updated)
 
 # ---------------- WEBHOOK FOR VAPI ---------------- #
+
 @router.post("/webhook")
+async def handle_vapi_webhook(request: Request):
+    db = await get_database(request)
+    body = await request.json()
+    print("📩 Received VAPI webhook:", body)
+
+    message = body.get("message", {})
+
+    # ✅ Only handle end-of-call-report
+    if message.get("type") == "end-of-call-report":
+        try:
+            call_id = body.get("call", {}).get("id")
+
+            # save raw data in callslog
+            await db.callslog.insert_one({
+                "body": body,
+                "receivedAt": datetime.utcnow()
+            })
+
+            # remove any existing call with same call_id
+            if call_id:
+                await db.calls.delete_one({"call.id": call_id})
+
+            # save structured call data
+            call_data = {
+                "timestamp": message.get("timestamp"),
+                "type": message.get("type"),
+                "analysis": message.get("analysis", {}),
+                "artifact": message.get("artifact", {}),
+                "performanceMetrics": body.get("performanceMetrics", {}),
+                "call": body.get("call", {}),
+                "assistant": body.get("assistant", {}),
+                "updatedAt": datetime.utcnow()
+            }
+
+            result = await db.calls.insert_one(call_data)
+
+            return {
+                "status": "ok",
+                "message": "✅ End-of-call report saved",
+                "call_id": call_id,
+                "inserted_id": str(result.inserted_id)
+            }
+
+        except Exception as e:
+            print("❌ Error saving end-of-call report:", e)
+            return {"status": "error", "message": str(e)}
+
+    # 🚫 Ignore everything else
+    return {"status": "ignored", "message": "Not an end-of-call-report"}
+
+
+
+    # ---------------- TOOL CALL HANDLING ---------------- #
+    function_name = message.get("name")
+    parameters = message.get("parameters", {})
+
+
+@router.post("/bookings")
 async def handle_vapi_tool_call(request: Request):
     db = await get_database(request)
     body = await request.json()
     print("Received body:", body)
+
     try:
         tool_call_data = body["message"]["toolCalls"][0]["function"]
         function_name = tool_call_data["name"]
         parameters = tool_call_data["arguments"]
+
         if isinstance(parameters, str):
             parameters = json.loads(parameters)
+
         print("Function name:", function_name)
         print("Parameters:", parameters)
+
     except Exception as e:
         print("Error parsing tool call:", e)
         return {"error": "Invalid tool call", "raw": body}
@@ -127,40 +194,47 @@ async def handle_vapi_tool_call(request: Request):
                 parameters["appointment_time"] = dt
             else:
                 parameters["appointment_time"] = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+
+            # check duplicates
             existing = await db.appointments.find_one({
                 "$or": [
                     {"patient_name": parameters["patient_name"], "appointment_time": parameters["appointment_time"]},
                     {"doctor_name": parameters["doctor_name"], "appointment_time": parameters["appointment_time"]},
                 ]
             })
+
             if existing:
                 return {"status": "error", "message": ERRORS["APPOINTMENT_EXISTS"]["detail"]}
+
             appointment = Appointment(**parameters)
             result = await db.appointments.insert_one(appointment.dict(by_alias=True, exclude={"id"}))
             inserted = await db.appointments.find_one({"_id": result.inserted_id})
+
             return {
                 "status": "success",
                 "message": f"✅ Appointment booked for {inserted['patient_name']} with {inserted['doctor_name']} at {inserted['appointment_time']}",
                 "appointment_id": str(inserted["_id"]),
             }
+
         except Exception as e:
-            print("DB insert error:", e)
+            print("❌ DB insert error:", e)
             return {"error": ERRORS["APPOINTMENT_CREATE_FAILED"]["detail"], "raw": parameters}
 
     elif function_name == "check_availability":
         try:
             if "appointment_time" in parameters:
                 dt = parse_datetime(parameters["appointment_time"])
-                time = dt
             else:
                 return {"status": "error", "message": ERRORS["MISSING_APPOINTMENT_TIME"]["detail"]}
-            appointments = await db.appointments.find({"appointment_time": {"$eq": time}}).to_list(None)
+
+            appointments = await db.appointments.find({"appointment_time": {"$eq": dt}}).to_list(None)
             return {"status": "success", "available": len(appointments) == 0}
+
         except Exception as e:
-            print("Availability check error:", e)
+            print("❌ Availability check error:", e)
             return {"status": "error", "message": str(e)}
 
-    return {"error": "Unknown function", "raw": body}
+    return {"status": "ignored", "message": "Webhook event not handled"}
 
 # ---------------- GETTING ASSISTANT CONFIG FOR VAPI ---------------- #
 @router.get("/bot-config")
@@ -174,6 +248,7 @@ async def get_assistant_config(request: Request):
     print("Sending config to Vapi:", json.dumps(config, indent=2))
     
     return config
+
 
 # ---------------- INSERT CLINIC BOT CONFIG ---------------- #
 

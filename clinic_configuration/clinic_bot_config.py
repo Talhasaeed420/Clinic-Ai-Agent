@@ -8,11 +8,12 @@ load_dotenv()
 MONGODB_URI = os.getenv("MONGODB_URI")
 DB_NAME = os.getenv("DB_NAME")
 
+
 async def insert_clinic_bot_config(db):
     # Delete old config
     delete_result = await db.bot_configs.delete_many({"name": "clinic_assistant_bot"})
     
-    # Config should be inside the function with proper indentation
+    # Fresh config
     config = {
         "name": "clinic_assistant_bot",
         "model": {
@@ -33,12 +34,12 @@ async def insert_clinic_bot_config(db):
             ]
         },
         "voice": {
-            "provider": "vapi",  # lowercase
-            "voiceId": "Ava",  # camelCase instead of snake_case
+            "provider": "vapi",  
+            "voiceId": "Ava",    
         },
         "transcriber": {
-            "provider": "deepgram",  # lowercase
-            "model": "nova-2",  # add model field
+            "provider": "deepgram",  
+            "model": "nova-2",      
             "language": "en"
         },
         "tools": [
@@ -74,12 +75,14 @@ async def insert_clinic_bot_config(db):
     return f"Deleted {delete_result.deleted_count} old config(s), inserted new config with ID: {result.inserted_id}"
 
 
-# Example usage:
-async def main():
-    client = AsyncIOMotorClient(MONGODB_URI)
-    db = client[DB_NAME]
-    result = await insert_clinic_bot_config(db)
-    print(result)
+async def update_clinic_bot_config(db, update: dict):
+    result = await db.bot_configs.update_one(
+        {"name": "clinic_assistant_bot"},
+        {"$set": update}
+    )
 
-if __name__ == "__main__":
-    asyncio.run(main())
+    if result.modified_count == 0:
+        return "No config updated (maybe config not found?)"
+    return f"Updated config with fields: {list(update.keys())}"
+
+
