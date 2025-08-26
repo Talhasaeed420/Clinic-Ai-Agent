@@ -1,20 +1,17 @@
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Body, Depends
+from motor.motor_asyncio import AsyncIOMotorDatabase
 import logging
-logger = logging.getLogger("appointments")
 from models.clinic import Appointment, AppointmentUpdate
 from database import get_database
 from typing import List
 from bson import ObjectId
 from fastapi.responses import JSONResponse
-from motor.motor_asyncio import AsyncIOMotorClient
-import os
+from fastapi.concurrency import run_in_threadpool
+from scripts.sync_vapi_assistant import sync_assistant
 import json
 from dateparser import parse as dateparse
 from datetime import datetime, timezone
-from models.mainvapidata import BotConfig, VapiCallReport
-from models.mainvapidata import CallAnalysis, CallArtifact, CostBreakdown, PerformanceMetrics, CallInfo, AssistantInfo
-
-from constants.constant import ERRORS, SUCCESS
+from constants.constant import ERRORS
 
 router = APIRouter()
 logger = logging.getLogger("appointments")
@@ -32,14 +29,14 @@ def parse_datetime(raw_time: str) -> datetime:
     )
 
     if not dt:
-        logger.error(f"Cannot parse appointment_time: {raw_time}")
+        logger.error("Cannot parse appointment_time: %s", raw_time)
         raise ValueError(f"Cannot parse appointment_time: {raw_time}")
 
     now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
     dt = dt.replace(second=0, microsecond=0)
 
     if dt < now:
-        logger.warning(f"Invalid appointment_time: {raw_time}. Past dates are not allowed.")
+        logger.warning("Invalid appointment_time: %s. Past dates are not allowed.", raw_time)
         raise ValueError(f"Invalid appointment_time: {raw_time}. Past dates are not allowed.")
 
     return dt
@@ -55,7 +52,8 @@ async def create_appointment(appointment: Appointment, request: Request):
         ]
     })
     if existing:
-        logger.info(f"Duplicate appointment attempt for patient={appointment.patient_name}, doctor={appointment.doctor_name}, time={appointment.appointment_time}")
+        logger.info("Duplicate appointment attempt: patient=%s, doctor=%s, time=%s",
+                    appointment.patient_name, appointment.doctor_name, appointment.appointment_time)
         raise HTTPException(**ERRORS["APPOINTMENT_EXISTS"])
 
     appointment_data = appointment.dict(by_alias=True, exclude={"id"})
@@ -65,7 +63,7 @@ async def create_appointment(appointment: Appointment, request: Request):
     if inserted:
         inserted["id"] = str(inserted["_id"])
         del inserted["_id"]
-        logger.info(f"Appointment created: {inserted}")
+        logger.info("Appointment created: %s", inserted)
         return Appointment(**inserted)
 
     logger.error("Appointment creation failed")
@@ -79,7 +77,7 @@ async def read_appointments(request: Request):
     for appt in appointments:
         appt["id"] = str(appt["_id"])
         del appt["_id"]
-    logger.info(f"Fetched {len(appointments)} appointments")
+    logger.info("Fetched %d appointments", len(appointments))
     return [Appointment(**appt) for appt in appointments]
 
 
@@ -89,16 +87,16 @@ async def read_appointment(appointment_id: str, request: Request):
     try:
         appt = await db.appointments.find_one({"_id": ObjectId(appointment_id)})
     except Exception:
-        logger.error(f"Invalid appointment ID: {appointment_id}")
+        logger.error("Invalid appointment ID: %s", appointment_id)
         raise HTTPException(**ERRORS["INVALID_APPOINTMENT_ID"])
 
     if appt:
         appt["id"] = str(appt["_id"])
         del appt["_id"]
-        logger.info(f"Appointment retrieved: {appointment_id}")
+        logger.info("Appointment retrieved: %s", appointment_id)
         return Appointment(**appt)
 
-    logger.warning(f"Appointment not found: {appointment_id}")
+    logger.warning("Appointment not found: %s", appointment_id)
     raise HTTPException(**ERRORS["APPOINTMENT_NOT_FOUND"])
 
 
@@ -107,23 +105,23 @@ async def update_appointment(appointment_id: str, appointment_update: Appointmen
     db = await get_database(request)
     update_data = {k: v for k, v in appointment_update.dict().items() if v is not None}
     if not update_data:
-        logger.warning(f"No fields to update for appointment_id={appointment_id}")
+        logger.warning("No fields to update for appointment_id=%s", appointment_id)
         raise HTTPException(**ERRORS["NO_FIELDS_TO_UPDATE"])
 
     try:
         result = await db.appointments.update_one({"_id": ObjectId(appointment_id)}, {"$set": update_data})
     except Exception:
-        logger.error(f"Invalid appointment ID during update: {appointment_id}")
+        logger.error("Invalid appointment ID during update: %s", appointment_id)
         raise HTTPException(**ERRORS["INVALID_APPOINTMENT_ID"])
 
     if result.modified_count == 0:
-        logger.warning(f"Appointment not found for update: {appointment_id}")
+        logger.warning("Appointment not found for update: %s", appointment_id)
         raise HTTPException(**ERRORS["APPOINTMENT_NOT_FOUND"])
 
     updated = await db.appointments.find_one({"_id": ObjectId(appointment_id)})
     updated["id"] = str(updated["_id"])
     del updated["_id"]
-    logger.info(f"Appointment updated: {updated}")
+    logger.info("Appointment updated: %s", updated)
     return Appointment(**updated)
 
 
@@ -132,7 +130,7 @@ async def update_appointment(appointment_id: str, appointment_update: Appointmen
 async def handle_vapi_webhook(request: Request):
     db = await get_database(request)
     body = await request.json()
-    logger.info(f"Received VAPI webhook: {body}")
+    logger.info("Received VAPI webhook: %s", body)
 
     message = body.get("message", {})
 
@@ -159,23 +157,24 @@ async def handle_vapi_webhook(request: Request):
                 "updatedAt": datetime.utcnow()
             }
 
-            result = await db.calls.insert_one(call_data)
-            logger.info(f"End-of-call report saved. call_id={call_id}")
+            await db.calls.insert_one(call_data)
+            logger.info("End-of-call report saved. call_id=%s", call_id)
             return JSONResponse(content={"message": "Webhook processed"}, status_code=200)
 
         except Exception as e:
-            logger.exception(f"Error saving end-of-call report: {e}")
+            logger.exception("Error saving end-of-call report: %s", e)
             return JSONResponse(content={"error": str(e)}, status_code=500)
 
     logger.info("Webhook ignored (not end-of-call-report)")
     return {"status": "ignored", "message": "Webhook event not handled"}
 
-#----------------Bookings APi------------------
+
+# ---------------- BOOKINGS API ---------------- #
 @router.post("/bookings")
 async def handle_vapi_tool_call(request: Request):
     db = await get_database(request)
     body = await request.json()
-    logger.info(f"Received tool call: {body}")
+    logger.info("Received tool call: %s", body)
 
     try:
         tool_call_data = body["message"]["toolCalls"][0]["function"]
@@ -185,27 +184,23 @@ async def handle_vapi_tool_call(request: Request):
         if isinstance(parameters, str):
             parameters = json.loads(parameters)
 
-        logger.info(f"Tool call function={function_name}, parameters={parameters}")
+        logger.info("Tool call function=%s, parameters=%s", function_name, parameters)
 
-    except Exception as e:
+    except Exception:
         logger.exception("Error parsing tool call")
         return {"error": "Invalid tool call", "raw": body}
 
     if function_name == "book_appointment":
         try:
-            # Parse and normalize appointment_time
             if "appointment_time" in parameters:
                 dt = parse_datetime(parameters["appointment_time"])
-                if not dt:
-                    return {"status": "error", "message": "Invalid date format"}
                 dt = dt.replace(second=0, microsecond=0).astimezone(timezone.utc)
                 parameters["appointment_time"] = dt
             else:
                 parameters["appointment_time"] = datetime.now(timezone.utc).replace(second=0, microsecond=0)
 
-            logger.info(f"Normalized appointment_time: {parameters['appointment_time']}")
+            logger.info("Normalized appointment_time: %s", parameters["appointment_time"])
 
-            # Check availability (doctor OR patient at the same time)
             existing = await db.appointments.find_one({
                 "$or": [
                     {"patient_name": parameters["patient_name"], "appointment_time": parameters["appointment_time"]},
@@ -217,30 +212,26 @@ async def handle_vapi_tool_call(request: Request):
                 logger.info("Duplicate appointment detected during booking")
                 return {"status": "error", "message": ERRORS["APPOINTMENT_EXISTS"]["detail"]}
 
-            # Insert appointment
             appointment = Appointment(**parameters)
             result = await db.appointments.insert_one(appointment.dict(by_alias=True, exclude={"id"}))
             inserted = await db.appointments.find_one({"_id": result.inserted_id})
 
-            logger.info(f"Appointment booked: {inserted}")
+            logger.info("Appointment booked: %s", inserted)
             return {
                 "status": "success",
                 "message": f"Appointment booked for {inserted['patient_name']} with {inserted['doctor_name']} at {inserted['appointment_time']}",
                 "appointment_id": str(inserted["_id"]),
             }
 
-        except Exception as e:
+        except Exception:
             logger.exception("DB insert error")
             return {"error": ERRORS["APPOINTMENT_CREATE_FAILED"]["detail"], "raw": parameters}
 
-    logger.info("Unhandled tool call")
+    logger.info("Unhandled tool call: %s", function_name)
     return {"status": "ignored", "message": "Webhook event not handled"}
 
 
-
-
-
-# ---------------- GETTING ASSISTANT CONFIG FOR VAPI ---------------- #
+# ---------------- GETTING ASSISTANT CONFIG ---------------- #
 @router.get("/bot-config")
 async def get_assistant_config(request: Request):
     db = await get_database(request)
@@ -248,23 +239,54 @@ async def get_assistant_config(request: Request):
     if not config:
         logger.warning("Assistant configuration not found")
         raise HTTPException(status_code=404, detail="Assistant configuration not found")
-    
-    logger.info(f"Sending config to Vapi: {json.dumps(config, indent=2)}")
+
+    logger.info("Sending config to Vapi: %s", json.dumps(config, indent=2))
     return config
 
 
-# ---------------- INSERT CLINIC BOT CONFIG ---------------- #
-async def get_database_from_clinic():
-    client = AsyncIOMotorClient(os.getenv("MONGODB_URI"))
-    return client[os.getenv("DB_NAME")]
+# ---------------- UPDATE BOT CONFIG ---------------- #
+@router.post("/bot-config/update")
+async def update_assistant_config(request: Request, new_config: dict = Body(...)):
+    db = await get_database(request)
 
-@router.post("/insert-clinic-bot-config")
-async def insert_clinic_bot_config_route():
-    db = await get_database_from_clinic()
+    existing = await db.bot_configs.find_one({}, {"_id": 0})
+    if not existing:
+        logger.warning("Assistant configuration not found during update")
+        raise HTTPException(status_code=404, detail="Assistant configuration not found")
+
+    merged_config = {**existing, **new_config}
+    await db.bot_configs.update_one({}, {"$set": merged_config})
+    updated = await db.bot_configs.find_one({}, {"_id": 0})
+
+    logger.info("Updated config: %s", json.dumps(updated, indent=2))
+    return {"message": "✅ Config updated successfully", "updated_config": updated}
+
+
+# ---------------- SYNC ASSISTANT ---------------- #
+@router.post("/sync-assistant")
+async def sync_assistant_endpoint():
     try:
-        result = await insert_clinic_bot_config(db)
-        logger.info(f"Inserted clinic bot config: {result}")
-        return {"message": result}
-    except Exception as e:
-        logger.exception(f"Error inserting clinic bot config: {e}")
-        return {"error": str(e)}
+        result = await run_in_threadpool(sync_assistant)
+        logger.info("Assistant synced successfully")
+        return {"status": "ok", "assistant": result}
+    except Exception:
+        logger.exception("Error syncing assistant")
+        return {"status": "error", "detail": "Failed to sync assistant"}
+
+
+# ---------------- GET VAPI OPTIONS ---------------- #
+@router.get("/vapi/options")
+async def get_vapi_options(db: AsyncIOMotorDatabase = Depends(get_database)):
+    collection = db["vapi-options"]
+    options_cursor = collection.find({})
+    options = await options_cursor.to_list(length=None)
+
+    if not options:
+        logger.warning("No options found in vapi-options collection")
+        return {"status": "error", "message": "No options found in database"}
+
+    for opt in options:
+        opt.pop("_id", None)
+
+    logger.info("Fetched %d vapi options", len(options))
+    return {"status": "ok", "data": options}
