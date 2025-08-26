@@ -170,7 +170,7 @@ async def handle_vapi_webhook(request: Request):
     logger.info("Webhook ignored (not end-of-call-report)")
     return {"status": "ignored", "message": "Webhook event not handled"}
 
-
+#----------------Bookings APi------------------
 @router.post("/bookings")
 async def handle_vapi_tool_call(request: Request):
     db = await get_database(request)
@@ -188,17 +188,24 @@ async def handle_vapi_tool_call(request: Request):
         logger.info(f"Tool call function={function_name}, parameters={parameters}")
 
     except Exception as e:
-        logger.error(f"Error parsing tool call: {e}")
+        logger.exception("Error parsing tool call")
         return {"error": "Invalid tool call", "raw": body}
 
     if function_name == "book_appointment":
         try:
+            # Parse and normalize appointment_time
             if "appointment_time" in parameters:
                 dt = parse_datetime(parameters["appointment_time"])
+                if not dt:
+                    return {"status": "error", "message": "Invalid date format"}
+                dt = dt.replace(second=0, microsecond=0).astimezone(timezone.utc)
                 parameters["appointment_time"] = dt
             else:
                 parameters["appointment_time"] = datetime.now(timezone.utc).replace(second=0, microsecond=0)
 
+            logger.info(f"Normalized appointment_time: {parameters['appointment_time']}")
+
+            # Check availability (doctor OR patient at the same time)
             existing = await db.appointments.find_one({
                 "$or": [
                     {"patient_name": parameters["patient_name"], "appointment_time": parameters["appointment_time"]},
@@ -210,6 +217,7 @@ async def handle_vapi_tool_call(request: Request):
                 logger.info("Duplicate appointment detected during booking")
                 return {"status": "error", "message": ERRORS["APPOINTMENT_EXISTS"]["detail"]}
 
+            # Insert appointment
             appointment = Appointment(**parameters)
             result = await db.appointments.insert_one(appointment.dict(by_alias=True, exclude={"id"}))
             inserted = await db.appointments.find_one({"_id": result.inserted_id})
@@ -222,27 +230,12 @@ async def handle_vapi_tool_call(request: Request):
             }
 
         except Exception as e:
-            logger.exception(f"DB insert error: {e}")
+            logger.exception("DB insert error")
             return {"error": ERRORS["APPOINTMENT_CREATE_FAILED"]["detail"], "raw": parameters}
-
-    elif function_name == "check_availability":
-        try:
-            if "appointment_time" in parameters:
-                dt = parse_datetime(parameters["appointment_time"])
-            else:
-                return {"status": "error", "message": ERRORS["MISSING_APPOINTMENT_TIME"]["detail"]}
-
-            appointments = await db.appointments.find({"appointment_time": {"$eq": dt}}).to_list(None)
-            available = len(appointments) == 0
-            logger.info(f"Checked availability for {dt}: {'available' if available else 'not available'}")
-            return {"status": "success", "available": available}
-
-        except Exception as e:
-            logger.exception(f"Availability check error: {e}")
-            return {"status": "error", "message": str(e)}
 
     logger.info("Unhandled tool call")
     return {"status": "ignored", "message": "Webhook event not handled"}
+
 
 
 
