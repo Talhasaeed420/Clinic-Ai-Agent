@@ -1,25 +1,29 @@
-from services.vapi_client import create_tool, create_assistant
+from services.vapi_client import (
+    create_tool,
+    create_assistant,
+    update_assistant,
+    save_assistant_id,
+    load_assistant_id
+)
 from clinic_configuration.assistant_config import tools_payloads, assistant_payload
 import sys
 
 if __name__ == "__main__":
-    # 1. Create tools
+    # 1️⃣ Create tools
     tool_ids = []
     for tool in tools_payloads():
         res = create_tool(tool)
-        print("Created tool response:", res)
-
         if "id" not in res:
-            print("❌ Failed to create tool. Exiting.")
             sys.exit(1)
-
         tool_ids.append(res["id"])
 
-    # 2. Create assistant
+    # 2️⃣ Create or update assistant
+    assistant_id = load_assistant_id()
     payload = assistant_payload(tool_ids)
-    res = create_assistant(payload)
-    print("Created assistant response:", res)
 
-    if "id" not in res:
-        print("❌ Failed to create assistant.")
-        sys.exit(1)
+    if assistant_id:
+        res = update_assistant(assistant_id, payload)
+    else:
+        res = create_assistant(payload)
+        if "id" in res:
+            save_assistant_id(res["id"])
