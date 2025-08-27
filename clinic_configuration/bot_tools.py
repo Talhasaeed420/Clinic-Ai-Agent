@@ -14,12 +14,13 @@ def tools_payloads():
                 "parameters": {
                     "type": "object",
                     "properties": {
+                        "patient_email": {"type": "string", "description": "Email of the patient"},
                         "patient_name": {"type": "string", "description": "Name of the patient"},
                         "doctor_name": {"type": "string", "description": "Name of the doctor"},
                         "appointment_time": {"type": "string", "description": "Time of the appointment"},
                         "reason": {"type": "string", "description": "Reason for the appointment"},
                     },
-                    "required": ["patient_name", "doctor_name", "appointment_time", "reason"]
+                    "required": ["patient_email", "patient_name", "doctor_name", "appointment_time", "reason"]
                 }
             },
             "server": {

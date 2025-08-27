@@ -12,6 +12,8 @@ import json
 from dateparser import parse as dateparse
 from datetime import datetime, timezone
 from constants.constant import ERRORS
+import httpx
+
 
 router = APIRouter()
 logger = logging.getLogger("appointments")
@@ -169,10 +171,19 @@ async def handle_vapi_webhook(request: Request):
     return {"status": "ignored", "message": "Webhook event not handled"}
 
 
+#----------------Make.com Webhook--------------------------
+MAKE_WEBHOOK_URL = "https://hook.us2.make.com/lqq29vebj4f6jlyxht7npxc66w1dgrp6"
+
+ERRORS = {
+    "APPOINTMENT_EXISTS": {"detail": "Appointment already exists"},
+    "APPOINTMENT_CREATE_FAILED": {"detail": "Failed to create appointment"},
+}
+
+
 # ---------------- BOOKINGS API ---------------- #
 @router.post("/bookings")
 async def handle_vapi_tool_call(request: Request):
-    db = await get_database(request)
+    db: AsyncIOMotorDatabase = await get_database(request)
     body = await request.json()
     logger.info("Received tool call: %s", body)
 
@@ -192,6 +203,7 @@ async def handle_vapi_tool_call(request: Request):
 
     if function_name == "book_appointment":
         try:
+            # normalize appointment_time
             if "appointment_time" in parameters:
                 dt = parse_datetime(parameters["appointment_time"])
                 dt = dt.replace(second=0, microsecond=0).astimezone(timezone.utc)
@@ -201,22 +213,37 @@ async def handle_vapi_tool_call(request: Request):
 
             logger.info("Normalized appointment_time: %s", parameters["appointment_time"])
 
+            # check duplicates
             existing = await db.appointments.find_one({
                 "$or": [
                     {"patient_name": parameters["patient_name"], "appointment_time": parameters["appointment_time"]},
                     {"doctor_name": parameters["doctor_name"], "appointment_time": parameters["appointment_time"]},
                 ]
             })
-
             if existing:
                 logger.info("Duplicate appointment detected during booking")
                 return {"status": "error", "message": ERRORS["APPOINTMENT_EXISTS"]["detail"]}
 
+            # save appointment
             appointment = Appointment(**parameters)
             result = await db.appointments.insert_one(appointment.dict(by_alias=True, exclude={"id"}))
             inserted = await db.appointments.find_one({"_id": result.inserted_id})
-
             logger.info("Appointment booked: %s", inserted)
+
+            # 🔥 send appointment details to Make.com webhook
+            try:
+                async with httpx.AsyncClient() as client:
+                    await client.post(MAKE_WEBHOOK_URL, json={
+                        "patient_email": inserted.get("patient_email"),
+                        "patient_name": inserted.get("patient_name"),
+                        "patient_phone": inserted.get("patient_phone"), 
+                        "doctor_name": inserted.get("doctor_name"),
+                        "appointment_time": inserted.get("appointment_time").isoformat() if inserted.get("appointment_time") else None,
+                    })
+                logger.info("Appointment pushed to Make.com successfully")
+            except Exception as e:
+                logger.exception("Failed to send appointment to Make.com")
+
             return {
                 "status": "success",
                 "message": f"Appointment booked for {inserted['patient_name']} with {inserted['doctor_name']} at {inserted['appointment_time']}",
