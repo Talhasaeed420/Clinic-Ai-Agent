@@ -127,7 +127,26 @@ async def update_appointment(appointment_id: str, appointment_update: Appointmen
     return Appointment(**updated)
 
 
+
 # ---------------- WEBHOOK FOR VAPI ---------------- #
+MAKE_SMS_WEBHOOK_URL = "https://hook.us2.make.com/fbw3pg8ehtfs4q3bc861455v9b0lrmre"
+
+def correct_number(number: str) -> str:
+
+    if not number:
+        return number
+
+    # Remove any suffix after ';'
+    number = number.split(";")[0].strip()
+
+    # Correct format
+    if number.startswith("+1"):  # VAPI sending US prefix by mistake
+        return "+" + number[2:]
+    elif number.startswith("0"):  # Local number
+        return "+" + number[1:]
+    else:
+        return number
+
 @router.post("/webhook")
 async def handle_vapi_webhook(request: Request):
     db = await get_database(request)
@@ -140,14 +159,21 @@ async def handle_vapi_webhook(request: Request):
         try:
             call_id = body.get("call", {}).get("id")
 
+            # Save raw webhook in logs
             await db.callslog.insert_one({
                 "body": body,
                 "receivedAt": datetime.utcnow()
             })
 
+            # Remove old call if call_id exists
             if call_id:
                 await db.calls.delete_one({"call.id": call_id})
 
+            # Extract and correct customer number
+            customer_number = message.get("customer", {}).get("number")
+            corrected_number = correct_number(customer_number) if customer_number else None
+
+            # Prepare call data to save
             call_data = {
                 "timestamp": message.get("timestamp"),
                 "type": message.get("type"),
@@ -156,11 +182,26 @@ async def handle_vapi_webhook(request: Request):
                 "performanceMetrics": body.get("performanceMetrics", {}),
                 "call": body.get("call", {}),
                 "assistant": body.get("assistant", {}),
+                "customer_number_original": customer_number,
+                "customer_number_corrected": corrected_number,
                 "updatedAt": datetime.utcnow()
             }
 
+            # Save call data to MongoDB
             await db.calls.insert_one(call_data)
             logger.info("End-of-call report saved. call_id=%s", call_id)
+
+            # Send corrected number to Make.com
+            if corrected_number:
+                try:
+                    async with httpx.AsyncClient() as client:
+                        await client.post(MAKE_SMS_WEBHOOK_URL, json={
+                            "patient_phone": corrected_number,
+                        })
+                    logger.info("Caller phone pushed to Make.com successfully: %s", corrected_number)
+                except Exception as e:
+                    logger.exception("Failed to push phone to Make.com")
+
             return JSONResponse(content={"message": "Webhook processed"}, status_code=200)
 
         except Exception as e:
@@ -169,8 +210,6 @@ async def handle_vapi_webhook(request: Request):
 
     logger.info("Webhook ignored (not end-of-call-report)")
     return {"status": "ignored", "message": "Webhook event not handled"}
-
-
 #----------------Make.com Webhook--------------------------
 MAKE_WEBHOOK_URL = "https://hook.us2.make.com/lqq29vebj4f6jlyxht7npxc66w1dgrp6"
 
@@ -236,7 +275,6 @@ async def handle_vapi_tool_call(request: Request):
                     await client.post(MAKE_WEBHOOK_URL, json={
                         "patient_email": inserted.get("patient_email"),
                         "patient_name": inserted.get("patient_name"),
-                        "patient_phone": inserted.get("patient_phone"), 
                         "doctor_name": inserted.get("doctor_name"),
                         "appointment_time": inserted.get("appointment_time").isoformat() if inserted.get("appointment_time") else None,
                     })
