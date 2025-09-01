@@ -218,7 +218,6 @@ ERRORS = {
     "APPOINTMENT_CREATE_FAILED": {"detail": "Failed to create appointment"},
 }
 
-
 # ---------------- BOOKINGS API ---------------- #
 @router.post("/bookings")
 async def handle_vapi_tool_call(request: Request):
@@ -238,7 +237,13 @@ async def handle_vapi_tool_call(request: Request):
 
     except Exception:
         logger.exception("Error parsing tool call")
-        return {"error": "Invalid tool call", "raw": body}
+        return {
+            "toolResult": {
+                "content": [{"type": "output_text", "text": "Invalid tool call received."}]
+            },
+            "status": "error",
+            "raw": body,
+        }
 
     if function_name == "book_appointment":
         try:
@@ -252,16 +257,23 @@ async def handle_vapi_tool_call(request: Request):
 
             logger.info("Normalized appointment_time: %s", parameters["appointment_time"])
 
-            # check duplicates
+          #duplicate check
             existing = await db.appointments.find_one({
                 "$or": [
                     {"patient_name": parameters["patient_name"], "appointment_time": parameters["appointment_time"]},
                     {"doctor_name": parameters["doctor_name"], "appointment_time": parameters["appointment_time"]},
                 ]
             })
+
             if existing:
                 logger.info("Duplicate appointment detected during booking")
-                return {"status": "error", "message": ERRORS["APPOINTMENT_EXISTS"]["detail"]}
+                return {
+                    "toolResult": {
+                        "content": [{"type": "output_text", "text": "An appointment already exists for this time."}]
+                    },
+                    "status": "error",
+                    "message": ERRORS["APPOINTMENT_EXISTS"]["detail"],
+                }
 
             # save appointment
             appointment = Appointment(**parameters)
@@ -269,7 +281,7 @@ async def handle_vapi_tool_call(request: Request):
             inserted = await db.appointments.find_one({"_id": result.inserted_id})
             logger.info("Appointment booked: %s", inserted)
 
-            # 🔥 send appointment details to Make.com webhook
+            # send appointment details to Make.com webhook
             try:
                 async with httpx.AsyncClient() as client:
                     await client.post(MAKE_WEBHOOK_URL, json={
@@ -279,18 +291,41 @@ async def handle_vapi_tool_call(request: Request):
                         "appointment_time": inserted.get("appointment_time").isoformat() if inserted.get("appointment_time") else None,
                     })
                 logger.info("Appointment pushed to Make.com successfully")
-            except Exception as e:
+            except Exception:
                 logger.exception("Failed to send appointment to Make.com")
 
             return {
+                "toolResult": {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": (
+                                f"Appointment booked for {inserted['patient_name']} "
+                                f"with doctor_name {inserted['doctor_name']} at {inserted['appointment_time'].isoformat()}"
+                            )
+                        }
+                    ]
+                },
                 "status": "success",
-                "message": f"Appointment booked for {inserted['patient_name']} with {inserted['doctor_name']} at {inserted['appointment_time']}",
                 "appointment_id": str(inserted["_id"]),
             }
 
         except Exception:
             logger.exception("DB insert error")
-            return {"error": ERRORS["APPOINTMENT_CREATE_FAILED"]["detail"], "raw": parameters}
+            return {
+                "toolResult": {
+                    "content": [{"type": "output_text", "text": "Failed to create the appointment. Please try again later."}]
+                },
+                "status": "error",
+                "message": ERRORS["APPOINTMENT_CREATE_FAILED"]["detail"],
+                "raw": parameters,
+            }
 
     logger.info("Unhandled tool call: %s", function_name)
-    return {"status": "ignored", "message": "Webhook event not handled"}
+    return {
+        "toolResult": {
+            "content": [{"type": "output_text", "text": "This webhook event was not handled."}]
+        },
+        "status": "ignored",
+        "message": "Webhook event not handled"
+    }

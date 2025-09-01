@@ -7,6 +7,7 @@ from bson import ObjectId
 from fastapi.responses import JSONResponse
 from fastapi.concurrency import run_in_threadpool
 from scripts.sync_vapi_assistant import sync_assistant
+from models.clinic_doctor import Doctor
 import json
 from datetime import datetime, timezone
 from constants.constant import ERRORS

@@ -53,6 +53,7 @@
 
    -----------------------Clinic Assistant Details---------------------------
 1. 
+Call ending-----------
 Start with making model so our endpoint (/webhook) receive vapi data (transcriber , voice , transcipt , assistantid, caller everything)
 -------Models  made for webhook----------
 1. Artifacts.py 

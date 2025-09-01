@@ -24,7 +24,7 @@ async def save_config():
             return
 
         # Import payload + schema
-        from clinic_configuration.assistant_config import assistant_payload
+        from onetime_botconfig.assistant_config import assistant_payload
         from models.dynamic_vapi import AssistantPayload
 
         # Build assistant config (NO toolIds)

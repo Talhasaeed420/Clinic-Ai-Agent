@@ -1,21 +1,17 @@
-from clinic_configuration.bot_tools import tools_payloads
 import logging
-logger = logging.getLogger(__name__)
-import sys
 import requests
 import os
 
 from services.vapi_client import (
-    create_tool,
     create_assistant,
     update_assistant,
     save_assistant_id,
-    load_assistant_id
+    load_assistant_id,
+    get_assistant,   # 👈 you’ll need to add this helper in vapi_client.py
 )
 
 logger = logging.getLogger(__name__)
 API_BASE_URL = os.getenv("PUBLIC_BASE_URL")
-
 
 def fetch_assistant_config():
     """Fetch assistant config (voice, model, transcriber, webhook) from DB API."""
@@ -25,34 +21,43 @@ def fetch_assistant_config():
     logger.info("Fetched assistant config successfully from %s", url)
     return res.json()
 
+# Put your actual tool IDs from VAPI dashboard
+AVAILABLE_TOOL_IDS = [
+    "1c4d2fd4-67b5-46b0-a695-a0ca4f6def25",  # get_doctors_by_specialty
+    "1aa5d70f-59d2-4c65-9546-5cef1a726ff6"   # book_appointment
+]
+
+READ_ONLY_FIELDS = {"id", "orgId", "createdAt", "updatedAt", "isServerUrlSecretSet"}
+
+def clean_payload(payload: dict) -> dict:
+    """Remove fields not allowed in update."""
+    return {k: v for k, v in payload.items() if k not in READ_ONLY_FIELDS}
 
 def sync_assistant():
-    """Main logic: create tools, fetch config, and create/update assistant."""
-    # 1️⃣ Create tools from local file
-    tool_ids = []
-    for tool in tools_payloads():
-        res = create_tool(tool)
-        if "id" not in res:
-            logger.error("Tool creation failed: %s", res)
-            raise RuntimeError(f"Tool creation failed: {res}")
-        logger.info("🔎 Tool created: %s", res["id"])
-        tool_ids.append(res["id"])
-
-    # 2️⃣ Fetch assistant config from API
     config = fetch_assistant_config()
+    assistant_id = load_assistant_id()
+    res = None
 
-    # 3️⃣ Merge DB assistant config with tool IDs
+    existing_assistant = None
+    if assistant_id:
+        try:
+            # ✅ Proper fetch using GET /assistants/{id}
+            existing_assistant = get_assistant(assistant_id)
+        except Exception as e:
+            logger.warning("Could not fetch existing assistant: %s", e)
+
     payload = {
-        **config,
+        **(existing_assistant or {}),  # preserve fields like systemPrompt
+        **config,                      # override with DB config
         "model": {
-            **config["model"],
-            "toolIds": tool_ids
+            **(existing_assistant.get("model", {}) if existing_assistant else {}),
+            **config.get("model", {}),
+            "toolIds": AVAILABLE_TOOL_IDS,
         }
     }
 
-    # 4️⃣ Load assistant ID and create/update
-    assistant_id = load_assistant_id()
-    res = None
+    # 🚀 Clean up payload before sending
+    payload = clean_payload(payload)
 
     if assistant_id:
         try:
