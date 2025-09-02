@@ -6,19 +6,11 @@ import asyncio
 import httpx  # async http client (non-blocking)
 
 VAPI_API_KEY = os.getenv("VAPI_API_KEY")
-BASE_URL = "https://api.vapi.ai/chat"
+VAPI_CHAT_BASE_URL = os.getenv("VAPI_CHAT_BASE_URL")
 
 
 def _extract_reply_and_tool(data: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
-    """
-    Robustly extract a displayable assistant reply and/or a tool call
-    from VAPI's response. Handles multiple shapes:
-      - {"output":[{"role":"assistant","content":"..."}]}
-      - {"output":[{"type":"message","content":"..."}]}
-      - tool calls in output or messages:
-          {"output":[{"type":"tool-call","toolName":"...","parameters":{...}}]}
-          {"messages":[{"role":"assistant","tool_calls":[...]}]}
-    """
+
     reply_text: Optional[str] = None
     tool_call: Optional[Dict[str, Any]] = None
 
@@ -87,7 +79,7 @@ async def send_message(user_id: str, assistant_id: str, user_input: str, db):
 
     # Call VAPI (non-blocking, with sensible timeout)
     async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, read=20.0, connect=10.0)) as client:
-        resp = await client.post(BASE_URL, json=payload, headers=headers)
+        resp = await client.post(VAPI_CHAT_BASE_URL, json=payload, headers=headers)
         # Guard non-200s
         if resp.status_code >= 400:
             return {
@@ -142,11 +134,8 @@ async def send_message(user_id: str, assistant_id: str, user_input: str, db):
                     }
                 )
         except Exception as e:
-            # Log but don't break the chat flow
-            print(f"[Mongo Persist Error] {e}")
-
-    # Fire-and-forget to avoid delaying the reply
-    asyncio.create_task(_persist())
+            
+           asyncio.create_task(_persist())
 
     return {
         "chatId": chat_id,
