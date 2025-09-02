@@ -7,11 +7,15 @@ from services.vapi_client import (
     update_assistant,
     save_assistant_id,
     load_assistant_id,
-    get_assistant,   # 👈 you’ll need to add this helper in vapi_client.py
+    get_assistant,   # make sure this exists in vapi_client.py
 )
 
 logger = logging.getLogger(__name__)
 API_BASE_URL = os.getenv("PUBLIC_BASE_URL")
+
+# -------------------------------
+# Fetch configs from your FastAPI
+# -------------------------------
 
 def fetch_assistant_config():
     """Fetch assistant config (voice, model, transcriber, webhook) from DB API."""
@@ -21,17 +25,33 @@ def fetch_assistant_config():
     logger.info("Fetched assistant config successfully from %s", url)
     return res.json()
 
-# Put your actual tool IDs from VAPI dashboard
-AVAILABLE_TOOL_IDS = [
-    "1c4d2fd4-67b5-46b0-a695-a0ca4f6def25",  # get_doctors_by_specialty
-    "1aa5d70f-59d2-4c65-9546-5cef1a726ff6"   # book_appointment
-]
+
+def fetch_tool_ids():
+    """Fetch available tool IDs from DB API."""
+    url = f"{API_BASE_URL}/get-tools"
+    res = requests.get(url, timeout=10)
+    res.raise_for_status()
+    logger.info("Fetched tool IDs successfully from %s", url)
+
+    tools = res.json()
+    # Extract just the AVAILABLE_TOOL_IDS values
+    return [tool["AVAILABLE_TOOL_IDS"] for tool in tools if "AVAILABLE_TOOL_IDS" in tool]
+
+
+# -------------------------------
+# Utility
+# -------------------------------
 
 READ_ONLY_FIELDS = {"id", "orgId", "createdAt", "updatedAt", "isServerUrlSecretSet"}
 
 def clean_payload(payload: dict) -> dict:
     """Remove fields not allowed in update."""
     return {k: v for k, v in payload.items() if k not in READ_ONLY_FIELDS}
+
+
+# -------------------------------
+# Main sync function
+# -------------------------------
 
 def sync_assistant():
     config = fetch_assistant_config()
@@ -46,13 +66,16 @@ def sync_assistant():
         except Exception as e:
             logger.warning("Could not fetch existing assistant: %s", e)
 
+    # 🔥 Fetch dynamic tool IDs from your FastAPI API
+    tool_ids = fetch_tool_ids()
+
     payload = {
         **(existing_assistant or {}),  # preserve fields like systemPrompt
         **config,                      # override with DB config
         "model": {
             **(existing_assistant.get("model", {}) if existing_assistant else {}),
             **config.get("model", {}),
-            "toolIds": AVAILABLE_TOOL_IDS,
+            "toolIds": tool_ids,
         }
     }
 
