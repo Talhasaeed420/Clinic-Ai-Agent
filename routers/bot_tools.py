@@ -29,7 +29,7 @@ async def get_tools():
 
 @router.post("/post-tool", response_model=Tool)
 async def post_tool(tool: Tool):
-    existing = await tools_collection.find_one({"tool_id": tool.tool_id})
+    existing = await tools_collection.find_one({"name": tool.name})
     if existing:
         raise HTTPException(status_code=400, detail="Tool already exists")
     result = await tools_collection.insert_one(tool.dict())
@@ -39,20 +39,20 @@ async def post_tool(tool: Tool):
 
 
 #-------------Update tool id-------------
-@router.put("/update-tool/{tool_id}", response_model=Tool)
-async def update_tool(tool_id: str, tool: Tool):
-    existing = await tools_collection.find_one({"tool_id": tool_id})
+@router.put("/update-tool/{name}", response_model=Tool)
+async def update_tool(name: str, tool: Tool):
+    existing = await tools_collection.find_one({"name": name})
     if not existing:
         raise HTTPException(status_code=404, detail="Tool not found")
-    await tools_collection.update_one({"tool_id": tool_id}, {"$set": tool.dict()})
+    await tools_collection.update_one({"name": name}, {"$set": tool.dict()})
     return tool
 
 
 #-------------Delete tool-----------------
-@router.delete("/delete-tool/{tool_id}", response_model=Tool)
-async def delete_tool(tool_id: str):
-    existing = await tools_collection.find_one({"tool_id": tool_id})
+@router.delete("/delete-tool/{name}", response_model=Tool)
+async def delete_tool(name: str):
+    existing = await tools_collection.find_one({"name": name})
     if not existing:
         raise HTTPException(status_code=404, detail="Tool not found")
-    await tools_collection.delete_one({"tool_id": tool_id})
+    await tools_collection.delete_one({"name": name})
     return existing
