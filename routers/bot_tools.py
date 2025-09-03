@@ -3,7 +3,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 import os
 from typing import List
-from models.tool_model import Tool
+from models.vapi_tool import Tool
 from fastapi import APIRouter, Request, HTTPException
 
 

@@ -10,7 +10,6 @@ VAPI_CHAT_BASE_URL = os.getenv("VAPI_CHAT_BASE_URL")
 
 
 def _extract_reply_and_tool(data: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
-
     reply_text: Optional[str] = None
     tool_call: Optional[Dict[str, Any]] = None
 
@@ -80,7 +79,6 @@ async def send_message(user_id: str, assistant_id: str, user_input: str, db):
     # Call VAPI (non-blocking, with sensible timeout)
     async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, read=20.0, connect=10.0)) as client:
         resp = await client.post(VAPI_CHAT_BASE_URL, json=payload, headers=headers)
-        # Guard non-200s
         if resp.status_code >= 400:
             return {
                 "error": f"VAPI HTTP {resp.status_code}",
@@ -134,12 +132,14 @@ async def send_message(user_id: str, assistant_id: str, user_input: str, db):
                     }
                 )
         except Exception as e:
-            
-           asyncio.create_task(_persist())
+            print("Mongo persist failed:", e)
+
+    # schedule background persist
+    asyncio.create_task(_persist())
 
     return {
         "chatId": chat_id,
         "reply": reply_text or assistant_msg["content"] or "",
-        "toolCall": tool_call,  # let your frontend know if a tool was invoked
+        "toolCall": tool_call,
         "raw": data,
     }
