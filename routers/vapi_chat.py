@@ -14,7 +14,7 @@ router = APIRouter()
 ASSISTANT_ID = os.getenv("ASSISTANT_ID")
 
 
-@router.post("/chat/{user_id}")
+@router.post("/chat")
 async def chat_with_bot(user_id: str, request: ChatRequest, db=Depends(get_database)):
     if not ASSISTANT_ID:
         return {"error": "Assistant ID not configured"}

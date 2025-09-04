@@ -1,3 +1,4 @@
+# services/webhook_service.py
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from utils.querybuilders import AppointmentQuery
 from utils.formatters import correct_number
@@ -9,66 +10,101 @@ import os
 from datetime import datetime, timezone
 import json
 
+from encrypt.encryption import encrypt_field  # 🔒
+
 MAKE_SMS_WEBHOOK_URL = os.getenv("MAKE_SMS_WEBHOOK_URL")
 MAKE_BOOKING_WEBHOOK_URL = os.getenv("MAKE_BOOKING_WEBHOOK_URL")
 
 
 class WebhookService:
-    """Handle VAPI webhooks and tool calls."""
+    """Handle VAPI webhooks, encrypt sensitive fields, and forward data."""
 
+    # ---------- ENCRYPT HELPERS ----------
+    @staticmethod
+    def _encrypt_value(value):
+        if value is None:
+            return None
+        try:
+            serialized = json.dumps(value)
+        except Exception:
+            serialized = str(value)
+        return encrypt_field(serialized)
+
+    @staticmethod
+    def _encrypt_message_block(message: dict) -> dict:
+        if not message:
+            return message
+        for field in ["message", "content", "summary", "transcript"]:
+            if field in message and message[field] is not None:
+                message[field] = WebhookService._encrypt_value(message[field])
+        return message
+
+    @staticmethod
+    def encrypt_body(body: dict) -> dict:
+        if not body or "message" not in body:
+            return body
+
+        msg = body["message"]
+
+        # top-level
+        for field in ["summary", "transcript", "costBreakdown"]:
+            if field in msg:
+                msg[field] = WebhookService._encrypt_value(msg[field])
+
+        # analysis
+        if "analysis" in msg:
+            for field in ["summary", "transcript", "costBreakdown"]:
+                if field in msg["analysis"]:
+                    msg["analysis"][field] = WebhookService._encrypt_value(msg["analysis"][field])
+
+        # artifact
+        if "artifact" in msg:
+            for field in ["summary", "transcript", "costBreakdown"]:
+                if field in msg["artifact"]:
+                    msg["artifact"][field] = WebhookService._encrypt_value(msg["artifact"][field])
+            if "messages" in msg["artifact"]:
+                msg["artifact"]["messages"] = [
+                    WebhookService._encrypt_message_block(m) for m in msg["artifact"]["messages"]
+                ]
+            if "messagesOpenAIFormatted" in msg["artifact"]:
+                msg["artifact"]["messagesOpenAIFormatted"] = [
+                    WebhookService._encrypt_message_block(m) for m in msg["artifact"]["messagesOpenAIFormatted"]
+                ]
+
+        # messages array
+        if "messages" in msg:
+            msg["messages"] = [
+                WebhookService._encrypt_message_block(m) for m in msg["messages"]
+            ]
+
+        # conversation
+        if "conversation" in msg:
+            msg["conversation"] = [
+                WebhookService._encrypt_message_block(m) for m in msg["conversation"]
+            ]
+
+        return body
+
+    # ---------- SAVE HELPERS ----------
     @staticmethod
     async def save_call_log(db: AsyncIOMotorDatabase, body: dict):
-        await db.callslog.insert_one({"body": body, "receivedAt": datetime.utcnow()})
+        """Save encrypted webhook data only in callslog"""
+        encrypted_body = WebhookService.encrypt_body(body)
+        await db.callslog.insert_one(
+            {"body": encrypted_body, "receivedAt": datetime.utcnow()}
+        )
 
-    @staticmethod
-    async def save_call_data(db: AsyncIOMotorDatabase, call_data: dict):
-        await db.calls.insert_one(call_data)
-
-    @staticmethod
-    def correct_number(number: str):
-        return correct_number(number)
-
-    @staticmethod
-    async def push_sms_to_make(phone: str):
-        if MAKE_SMS_WEBHOOK_URL:
-            async with httpx.AsyncClient() as client:
-                await client.post(MAKE_SMS_WEBHOOK_URL, json={"patient_phone": phone})
-
-    @staticmethod
-    async def push_booking_to_make(data: dict):
-        if MAKE_BOOKING_WEBHOOK_URL:
-            async with httpx.AsyncClient() as client:
-                await client.post(MAKE_BOOKING_WEBHOOK_URL, json=data)
-
+    # ---------- MAIN HANDLERS ----------
     @staticmethod
     async def handle_end_of_call(db: AsyncIOMotorDatabase, body: dict):
         message = body.get("message", {})
         if message.get("type") != "end-of-call-report":
             return AppointmentQuery.generic_success("Webhook event not handled", {"status": "ignored"})
 
-        call_id = body.get("call", {}).get("id")
-        await WebhookService.save_call_log(db, body)
-
-        if call_id:
-            await db.calls.delete_one({"call.id": call_id})
+        await WebhookService.save_call_log(db, body)  # ✅ Only saving to callslog
 
         customer_number = message.get("customer", {}).get("number")
         corrected_number = WebhookService.correct_number(customer_number) if customer_number else None
-
-        call_data = {
-            "timestamp": message.get("timestamp"),
-            "type": message.get("type"),
-            "analysis": message.get("analysis", {}),
-            "artifact": message.get("artifact", {}),
-            "performanceMetrics": body.get("performanceMetrics", {}),
-            "call": body.get("call", {}),
-            "assistant": body.get("assistant", {}),
-            "customer_number_original": customer_number,
-            "customer_number_corrected": corrected_number,
-            "updatedAt": datetime.utcnow(),
-        }
-
-        await WebhookService.save_call_data(db, call_data)
 
         if corrected_number:
             await WebhookService.push_sms_to_make(corrected_number)
@@ -86,22 +122,29 @@ class WebhookService:
         if function_name != "book_appointment":
             return AppointmentQuery.error("This webhook event was not handled.", status="error")
 
+        # parse appointment_time
         if "appointment_time" in parameters:
             parameters["appointment_time"] = parse_datetime(parameters["appointment_time"])
         else:
             parameters["appointment_time"] = datetime.now(timezone.utc).replace(second=0, microsecond=0)
 
+        # check for duplicate
         existing = await AppointmentService.find_duplicate(
             db, parameters["patient_name"], parameters["doctor_name"], parameters["appointment_time"]
         )
-
         if existing:
             return AppointmentQuery.error("Appointment already exists", status="error")
 
+        # 🔒 encrypt email BEFORE creating the appointment
+        if "patient_email" in parameters and parameters["patient_email"]:
+            parameters["patient_email"] = WebhookService._encrypt_value(parameters["patient_email"])
+
+        # create appointment
         appointment = Appointment(**parameters)
-        inserted = await AppointmentService.create_appointment(db, appointment)
+        inserted = await AppointmentService.create(db, appointment)
 
         if inserted:
+            # push encrypted email externally
             await WebhookService.push_booking_to_make({
                 "patient_email": inserted.get("patient_email"),
                 "patient_name": inserted.get("patient_name"),
@@ -109,6 +152,26 @@ class WebhookService:
                 "appointment_time": inserted.get("appointment_time").isoformat() if inserted.get("appointment_time") else None,
             })
 
+            # optionally save appointment in callslog if needed
+            await WebhookService.save_call_log(db, {"message": tool_call_data})
+
         return AppointmentQuery.appointment_booked(
             inserted["patient_name"], inserted["doctor_name"], inserted["id"]
         )
+
+    # ---------- EXTERNAL PUSH HELPERS ----------
+    @staticmethod
+    def correct_number(number: str):
+        return correct_number(number)
+
+    @staticmethod
+    async def push_sms_to_make(phone: str):
+        if MAKE_SMS_WEBHOOK_URL:
+            async with httpx.AsyncClient() as client:
+                await client.post(MAKE_SMS_WEBHOOK_URL, json={"patient_phone": phone})
+
+    @staticmethod
+    async def push_booking_to_make(data: dict):
+        if MAKE_BOOKING_WEBHOOK_URL:
+            async with httpx.AsyncClient() as client:
+                await client.post(MAKE_BOOKING_WEBHOOK_URL, json=data)
