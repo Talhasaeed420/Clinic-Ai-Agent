@@ -1,7 +1,7 @@
 from log_config.logging_config import setup_logging
 setup_logging()
 from fastapi import FastAPI
-from routers import clinic, call_center, bot_clinic, doctors_data, bot_tools, vapi_chat,vapi_metric
+from routers import clinic, call_center, bot_clinic, doctors_data, bot_tools, vapi_chat,vapi_metric, admin
 from database import lifespan
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -24,3 +24,4 @@ app.include_router(doctors_data.router, tags=["Doctors Data"])
 app.include_router(bot_tools.router, tags=["Bot Tools"])
 app.include_router(vapi_chat.router, tags=["VAPI Chat"])
 app.include_router(vapi_metric.router, tags=["VAPI Metrics"])
+app.include_router(admin.router, tags=["Admin"])

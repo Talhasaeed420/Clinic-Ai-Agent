@@ -8,7 +8,12 @@ class AppointmentService:
     """All database logic related to appointments."""
 
     @staticmethod
-    async def find_duplicate(db: AsyncIOMotorDatabase, patient_name: str, doctor_name: str, appointment_time: datetime):
+    async def find_duplicate(
+        db: AsyncIOMotorDatabase,
+        patient_name: str,
+        doctor_name: str,
+        appointment_time: datetime,
+    ):
         """Check if an appointment already exists for a patient or doctor at the same time."""
         query = AppointmentQuery.duplicate_check(patient_name, doctor_name, appointment_time)
         return await db.appointments.find_one(query)
@@ -57,7 +62,7 @@ class AppointmentService:
 
         result = await db.appointments.update_one(
             AppointmentQuery.by_id(appointment_id),
-            {"$set": update_data}
+            {"$set": update_data},
         )
         if result.modified_count == 0:
             return None
