@@ -21,3 +21,15 @@ class AppointmentUpdate(BaseModel):
     doctor_name: Optional[str] = None
     appointment_time: Optional[datetime] = None
     reason: Optional[str] = None
+
+
+class DeleteRequest(BaseModel):
+    id: str
+
+class AppointmentUpdateRequest(BaseModel):
+    id: str
+    patient_name: Optional[str] = None
+    patient_email: Optional[str] = None   
+    doctor_name: Optional[str] = None
+    appointment_time: Optional[datetime] = None
+    reason: Optional[str] = None

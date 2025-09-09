@@ -34,7 +34,7 @@ class WebhookService:
     def _encrypt_message_block(message: dict) -> dict:
         if not message:
             return message
-        for field in ["message", "content", "summary", "transcript"]:
+        for field in ["message", "content", "summary", "transcript","cost","costs","customer"]:
             if field in message and message[field] is not None:
                 message[field] = WebhookService._encrypt_value(message[field])
         return message
@@ -47,19 +47,19 @@ class WebhookService:
         msg = body["message"]
 
         # top-level
-        for field in ["summary", "transcript", "costBreakdown"]:
+        for field in ["summary", "transcript", "costBreakdown","cost","costs","customer"]:
             if field in msg:
                 msg[field] = WebhookService._encrypt_value(msg[field])
 
         # analysis
         if "analysis" in msg:
-            for field in ["summary", "transcript", "costBreakdown"]:
+            for field in ["summary", "transcript", "costBreakdown","cost","costs","customer"]:
                 if field in msg["analysis"]:
                     msg["analysis"][field] = WebhookService._encrypt_value(msg["analysis"][field])
 
         # artifact
         if "artifact" in msg:
-            for field in ["summary", "transcript", "costBreakdown"]:
+            for field in ["summary", "transcript", "costBreakdown","cost","costs","customer"]:
                 if field in msg["artifact"]:
                     msg["artifact"][field] = WebhookService._encrypt_value(msg["artifact"][field])
             if "messages" in msg["artifact"]:
@@ -101,13 +101,7 @@ class WebhookService:
         if message.get("type") != "end-of-call-report":
             return AppointmentQuery.generic_success("Webhook event not handled", {"status": "ignored"})
 
-        await WebhookService.save_call_log(db, body)  # ✅ Only saving to callslog
-
-        customer_number = message.get("customer", {}).get("number")
-        corrected_number = WebhookService.correct_number(customer_number) if customer_number else None
-
-        if corrected_number:
-            await WebhookService.push_sms_to_make(corrected_number)
+        await WebhookService.save_call_log(db, body)  # ✅ Only saving to callslo
 
         return AppointmentQuery.generic_success("Webhook processed")
 
@@ -141,7 +135,7 @@ class WebhookService:
 
         # create appointment
         appointment = Appointment(**parameters)
-        inserted = await AppointmentService.create(db, appointment)
+        inserted = await AppointmentService.create_appointment(db, appointment)
 
         if inserted:
             # push encrypted email externally
@@ -153,7 +147,7 @@ class WebhookService:
             })
 
             # optionally save appointment in callslog if needed
-            await WebhookService.save_call_log(db, {"message": tool_call_data})
+           # await WebhookService.save_call_log(db, {"message": tool_call_data})
 
         return AppointmentQuery.appointment_booked(
             inserted["patient_name"], inserted["doctor_name"], inserted["id"]

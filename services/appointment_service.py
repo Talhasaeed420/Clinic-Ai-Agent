@@ -2,6 +2,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from models.clinic import Appointment
 from utils.querybuilders import AppointmentQuery
 from datetime import datetime
+from fastapi import HTTPException
 
 
 class AppointmentService:
@@ -19,7 +20,7 @@ class AppointmentService:
         return await db.appointments.find_one(query)
 
     @staticmethod
-    async def create(db: AsyncIOMotorDatabase, appointment: Appointment):
+    async def create_appointment(db: AsyncIOMotorDatabase, appointment: Appointment):
         """Create a new appointment in the database."""
         # Check for duplicate
         existing = await AppointmentService.find_duplicate(
@@ -37,7 +38,7 @@ class AppointmentService:
         return inserted
 
     @staticmethod
-    async def get_all(db: AsyncIOMotorDatabase):
+    async def get_all_appointments(db: AsyncIOMotorDatabase):
         """Get all appointments from the database."""
         appointments = await db.appointments.find().to_list(None)
         for appt in appointments:
@@ -46,7 +47,7 @@ class AppointmentService:
         return appointments
 
     @staticmethod
-    async def get_by_id(db: AsyncIOMotorDatabase, appointment_id: str):
+    async def get_appointment_by_id(db: AsyncIOMotorDatabase, appointment_id: str):
         """Get a single appointment by its ID."""
         appt = await db.appointments.find_one(AppointmentQuery.by_id(appointment_id))
         if appt:
@@ -55,16 +56,18 @@ class AppointmentService:
         return appt
 
     @staticmethod
-    async def update(db: AsyncIOMotorDatabase, appointment_id: str, update_data: dict):
+    async def update_appointment(db: AsyncIOMotorDatabase, appointment_id: str, update_data: dict):
         """Update an existing appointment."""
-        if not update_data:
-            return None
+        if not update_data:  # nothing to update
+            raise HTTPException(status_code=400, detail="No fields provided to update")
 
         result = await db.appointments.update_one(
             AppointmentQuery.by_id(appointment_id),
             {"$set": update_data},
         )
-        if result.modified_count == 0:
+
+        if result.matched_count == 0:
+            # no appointment with that id
             return None
 
         updated = await db.appointments.find_one(AppointmentQuery.by_id(appointment_id))
@@ -72,3 +75,9 @@ class AppointmentService:
             updated["id"] = str(updated["_id"])
             del updated["_id"]
         return updated
+
+    @staticmethod
+    async def delete_appointment(db: AsyncIOMotorDatabase, appointment_id: str):
+        """Delete an appointment by its ID."""
+        result = await db.appointments.delete_one(AppointmentQuery.by_id(appointment_id))
+        return result.deleted_count > 0

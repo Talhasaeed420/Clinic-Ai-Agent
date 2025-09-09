@@ -5,6 +5,7 @@ pydantic==2.9.2
 uvicorn==0.32.0
 python-dotenv==1.0.1
 httpx==0.23.0
+
 #These are the requirements needed to install before moving towards code running
 
 
