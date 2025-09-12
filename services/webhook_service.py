@@ -1,4 +1,3 @@
-# services/webhook_service.py
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from utils.querybuilders import AppointmentQuery
 from utils.formatters import correct_number
@@ -34,7 +33,7 @@ class WebhookService:
     def _encrypt_message_block(message: dict) -> dict:
         if not message:
             return message
-        for field in ["message", "content", "summary", "transcript","cost","costs","customer"]:
+        for field in ["message", "content", "summary", "transcript", "cost", "costs", "customer"]:
             if field in message and message[field] is not None:
                 message[field] = WebhookService._encrypt_value(message[field])
         return message
@@ -47,19 +46,19 @@ class WebhookService:
         msg = body["message"]
 
         # top-level
-        for field in ["summary", "transcript", "costBreakdown","cost","costs","customer"]:
+        for field in ["summary", "transcript", "costBreakdown", "cost", "costs", "customer"]:
             if field in msg:
                 msg[field] = WebhookService._encrypt_value(msg[field])
 
         # analysis
         if "analysis" in msg:
-            for field in ["summary", "transcript", "costBreakdown","cost","costs","customer"]:
+            for field in ["summary", "transcript", "costBreakdown", "cost", "costs", "customer"]:
                 if field in msg["analysis"]:
                     msg["analysis"][field] = WebhookService._encrypt_value(msg["analysis"][field])
 
         # artifact
         if "artifact" in msg:
-            for field in ["summary", "transcript", "costBreakdown","cost","costs","customer"]:
+            for field in ["summary", "transcript", "costBreakdown", "cost", "costs", "customer"]:
                 if field in msg["artifact"]:
                     msg["artifact"][field] = WebhookService._encrypt_value(msg["artifact"][field])
             if "messages" in msg["artifact"]:
@@ -87,11 +86,22 @@ class WebhookService:
 
     # ---------- SAVE HELPERS ----------
     @staticmethod
-    async def save_call_log(db: AsyncIOMotorDatabase, body: dict):
-        """Save encrypted webhook data only in callslog"""
+    async def save_call_log(db: AsyncIOMotorDatabase, body: dict, call_id: str):
+        """Save encrypted webhook data with call duration in callslog"""
         encrypted_body = WebhookService.encrypt_body(body)
+        message = body.get("message", {})
+
+        duration_seconds = message.get("durationSeconds") or message.get("duration") or 0
+        duration_minutes = round(duration_seconds / 60, 2) if duration_seconds else 0.0
+
         await db.callslog.insert_one(
-            {"body": encrypted_body, "receivedAt": datetime.utcnow()}
+            {
+                "body": encrypted_body,
+                "receivedAt": datetime.utcnow(),
+                "call_duration_seconds": duration_seconds,
+                "call_duration_minutes": duration_minutes,
+                "call_id": call_id,  # Save call_id for linking
+            }
         )
 
     # ---------- MAIN HANDLERS ----------
@@ -101,9 +111,40 @@ class WebhookService:
         if message.get("type") != "end-of-call-report":
             return AppointmentQuery.generic_success("Webhook event not handled", {"status": "ignored"})
 
-        await WebhookService.save_call_log(db, body)  # ✅ Only saving to callslo
+        # Extract call_id (assumes VAPI payload has it at message.call.id)
+        call_id = message.get("call", {}).get("id")
+        if not call_id:
+            return AppointmentQuery.error("Missing call_id in payload", status="error")
 
-        return AppointmentQuery.generic_success("Webhook processed")
+        # Save into callslog
+        await WebhookService.save_call_log(db, body, call_id)
+
+        # Find matching appointment by call_id and update with duration if it exists
+        existing_apt = await db.appointments.find_one({"call_id": call_id})
+        if existing_apt:
+            duration_seconds = message.get("durationSeconds") or message.get("duration") or 0
+            duration_minutes = round(duration_seconds / 60, 2) if duration_seconds else 0.0
+
+            await db.appointments.update_one(
+                {"call_id": call_id},
+                {"$set": {
+                    "call_duration_seconds": duration_seconds,
+                    "call_duration_minutes": duration_minutes
+                }}
+            )
+
+            # Push to Make.com now that we have both appointment and duration
+            await WebhookService.push_booking_to_make({
+                "patient_email": existing_apt.get("patient_email"),
+                "patient_name": existing_apt.get("patient_name"),
+                "doctor_name": existing_apt.get("doctor_name"),
+                "appointment_time": existing_apt.get("appointment_time").isoformat()
+                if existing_apt.get("appointment_time") else None,
+                "source": existing_apt.get("source"),
+                "call_duration_minutes": duration_minutes
+            })
+
+        return AppointmentQuery.generic_success("Webhook processed & appointment updated if exists")
 
     @staticmethod
     async def handle_tool_call(db: AsyncIOMotorDatabase, body: dict):
@@ -116,39 +157,63 @@ class WebhookService:
         if function_name != "book_appointment":
             return AppointmentQuery.error("This webhook event was not handled.", status="error")
 
-        # parse appointment_time
+        # Extract call_id (assumes VAPI payload has it at message.call.id)
+        call_id = body["message"].get("call", {}).get("id")
+        if not call_id:
+            return AppointmentQuery.error("Missing call_id in payload", status="error")
+
+        # Detect source
+        if body["message"].get("call"):
+            source = "book_call"
+        elif body["message"].get("chat"):
+            source = "book_chat"
+        else:
+            source = "book_unknown"
+
+        parameters["source"] = source
+        parameters["call_id"] = call_id  # Add to parameters for saving
+
+        # Parse appointment time
         if "appointment_time" in parameters:
             parameters["appointment_time"] = parse_datetime(parameters["appointment_time"])
         else:
             parameters["appointment_time"] = datetime.now(timezone.utc).replace(second=0, microsecond=0)
 
-        # check for duplicate
+        # Check duplicate
         existing = await AppointmentService.find_duplicate(
-            db, parameters["patient_name"], parameters["doctor_name"], parameters["appointment_time"]
+            db, parameters.get("patient_name"), parameters.get("doctor_name"), parameters.get("appointment_time")
         )
         if existing:
             return AppointmentQuery.error("Appointment already exists", status="error")
 
-        # 🔒 encrypt email BEFORE creating the appointment
-        if "patient_email" in parameters and parameters["patient_email"]:
-            parameters["patient_email"] = WebhookService._encrypt_value(parameters["patient_email"])
-
-        # create appointment
+        # Create appointment
         appointment = Appointment(**parameters)
         inserted = await AppointmentService.create_appointment(db, appointment)
 
-        if inserted:
-            # push encrypted email externally
+        # Check if call log (with duration) already exists (for out-of-order webhooks)
+        existing_log = await db.callslog.find_one({"call_id": call_id})
+        if existing_log:
+            # Update appointment with duration from log
+            await db.appointments.update_one(
+                {"call_id": call_id},
+                {"$set": {
+                    "call_duration_seconds": existing_log["call_duration_seconds"],
+                    "call_duration_minutes": existing_log["call_duration_minutes"]
+                }}
+            )
+
+            # Push to Make.com now that we have both
             await WebhookService.push_booking_to_make({
                 "patient_email": inserted.get("patient_email"),
                 "patient_name": inserted.get("patient_name"),
                 "doctor_name": inserted.get("doctor_name"),
-                "appointment_time": inserted.get("appointment_time").isoformat() if inserted.get("appointment_time") else None,
+                "appointment_time": inserted.get("appointment_time").isoformat()
+                if inserted.get("appointment_time") else None,
+                "source": inserted.get("source"),
+                "call_duration_minutes": existing_log["call_duration_minutes"]
             })
 
-            # optionally save appointment in callslog if needed
-           # await WebhookService.save_call_log(db, {"message": tool_call_data})
-
+        # Note: If no log yet, don't push here—handle_end_of_call will do it when it arrives
         return AppointmentQuery.appointment_booked(
             inserted["patient_name"], inserted["doctor_name"], inserted["id"]
         )
