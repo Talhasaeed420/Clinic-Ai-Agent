@@ -67,7 +67,7 @@ class AppointmentService:
         )
 
         if result.matched_count == 0:
-            # no appointment with that id
+            # no appointm   t with that id
             return None
 
         updated = await db.appointments.find_one(AppointmentQuery.by_id(appointment_id))
@@ -81,3 +81,12 @@ class AppointmentService:
         """Delete an appointment by its ID."""
         result = await db.appointments.delete_one(AppointmentQuery.by_id(appointment_id))
         return result.deleted_count > 0
+
+    @staticmethod
+    async def get_appointments_by_email(db: AsyncIOMotorDatabase, email: str):
+        """Fetch appointments by patient_email"""
+        appointments = await db.appointments.find({"patient_email": email}).to_list(None)
+        for appt in appointments:
+            appt["id"] = str(appt["_id"])
+            del appt["_id"]
+        return appointments

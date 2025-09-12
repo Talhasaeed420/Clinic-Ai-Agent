@@ -9,6 +9,9 @@ class Appointment(BaseModel):
     doctor_name: str
     appointment_time: datetime
     reason: Optional[str] = None
+    source: Optional[str] = None
+    call_id: str = None
+    call_duration_minutes: float = 0.0
 
     class Config:
         arbitrary_types_allowed = True
@@ -28,8 +31,11 @@ class DeleteRequest(BaseModel):
 
 class AppointmentUpdateRequest(BaseModel):
     id: str
+    user_id: Optional[str] = None
     patient_name: Optional[str] = None
     patient_email: Optional[str] = None   
     doctor_name: Optional[str] = None
     appointment_time: Optional[datetime] = None
     reason: Optional[str] = None
+    source: Optional[str] = None
+
