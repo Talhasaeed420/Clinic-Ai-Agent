@@ -8,8 +8,12 @@ import httpx
 import os
 from datetime import datetime, timezone
 import json
+import logging
 
 from encrypt.encryption import encrypt_field  # 🔒
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 MAKE_SMS_WEBHOOK_URL = os.getenv("MAKE_SMS_WEBHOOK_URL")
 MAKE_BOOKING_WEBHOOK_URL = os.getenv("MAKE_BOOKING_WEBHOOK_URL")
@@ -133,7 +137,7 @@ class WebhookService:
                 }}
             )
 
-            # Push to Make.com now that we have both appointment and duration
+            # Push to Make.com with duration for call-based bookings
             await WebhookService.push_booking_to_make({
                 "patient_email": existing_apt.get("patient_email"),
                 "patient_name": existing_apt.get("patient_name"),
@@ -141,82 +145,119 @@ class WebhookService:
                 "appointment_time": existing_apt.get("appointment_time").isoformat()
                 if existing_apt.get("appointment_time") else None,
                 "source": existing_apt.get("source"),
-                "call_duration_minutes": duration_minutes
+                "call_duration_minutes": duration_minutes  # Include duration for calls
             })
 
         return AppointmentQuery.generic_success("Webhook processed & appointment updated if exists")
 
     @staticmethod
     async def handle_tool_call(db: AsyncIOMotorDatabase, body: dict):
-        tool_call_data = body["message"]["toolCalls"][0]["function"]
-        function_name = tool_call_data["name"]
-        parameters = tool_call_data["arguments"]
-        if isinstance(parameters, str):
-            parameters = json.loads(parameters)
+        try:
+            # Log the incoming payload for debugging
+            logger.info(f"Processing tool call payload: {json.dumps(body, indent=2)}")
 
-        if function_name != "book_appointment":
-            return AppointmentQuery.error("This webhook event was not handled.", status="error")
+            # Validate toolCalls
+            if not body.get("message", {}).get("toolCalls"):
+                return AppointmentQuery.error("Missing or empty toolCalls in payload", status="error")
 
-        # Extract call_id (assumes VAPI payload has it at message.call.id)
-        call_id = body["message"].get("call", {}).get("id")
-        if not call_id:
-            return AppointmentQuery.error("Missing call_id in payload", status="error")
+            tool_call_data = body["message"]["toolCalls"][0]["function"]
+            function_name = tool_call_data["name"]
+            parameters = tool_call_data["arguments"]
+            if isinstance(parameters, str):
+                try:
+                    parameters = json.loads(parameters)
+                except json.JSONDecodeError as e:
+                    logger.error(f"Invalid arguments JSON: {str(e)}")
+                    return AppointmentQuery.error(f"Invalid arguments JSON: {str(e)}", status="error")
 
-        # Detect source
-        if body["message"].get("call"):
-            source = "book_call"
-        elif body["message"].get("chat"):
-            source = "book_chat"
-        else:
-            source = "book_unknown"
+            if function_name != "book_appointment":
+                return AppointmentQuery.error("This webhook event was not handled.", status="error")
 
-        parameters["source"] = source
-        parameters["call_id"] = call_id  # Add to parameters for saving
+            # Extract call_id (support both call and chat)
+            call_id = body["message"].get("call", {}).get("id") or body["message"].get("chat", {}).get("id")
+            if not call_id:
+                return AppointmentQuery.error("Missing call_id or chat_id in payload", status="error")
 
-        # Parse appointment time
-        if "appointment_time" in parameters:
-            parameters["appointment_time"] = parse_datetime(parameters["appointment_time"])
-        else:
-            parameters["appointment_time"] = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+            # Detect source
+            if body["message"].get("call"):
+                source = "book_call"
+            elif body["message"].get("chat"):
+                source = "book_chat"
+            else:
+                source = "book_unknown"
 
-        # Check duplicate
-        existing = await AppointmentService.find_duplicate(
-            db, parameters.get("patient_name"), parameters.get("doctor_name"), parameters.get("appointment_time")
-        )
-        if existing:
-            return AppointmentQuery.error("Appointment already exists", status="error")
+            parameters["source"] = source
+            parameters["call_id"] = call_id
 
-        # Create appointment
-        appointment = Appointment(**parameters)
-        inserted = await AppointmentService.create_appointment(db, appointment)
+            # Parse appointment time
+            if "appointment_time" in parameters and parameters["appointment_time"]:
+                try:
+                    parameters["appointment_time"] = parse_datetime(parameters["appointment_time"])
+                except Exception as e:
+                    logger.error(f"Failed to parse appointment_time: {str(e)}")
+                    return AppointmentQuery.error(f"Invalid appointment_time: {str(e)}", status="error")
+            else:
+                parameters["appointment_time"] = datetime.now(timezone.utc).replace(second=0, microsecond=0)
 
-        # Check if call log (with duration) already exists (for out-of-order webhooks)
-        existing_log = await db.callslog.find_one({"call_id": call_id})
-        if existing_log:
-            # Update appointment with duration from log
+            # Check required fields
+            required_fields = ["patient_name", "doctor_name"]
+            missing = [f for f in required_fields if f not in parameters or not parameters[f]]
+            if missing:
+                return AppointmentQuery.error(f"Missing required fields: {', '.join(missing)}", status="error")
+
+            # Check duplicate
+            existing = await AppointmentService.find_duplicate(
+                db, parameters.get("patient_name"), parameters.get("doctor_name"), parameters.get("appointment_time")
+            )
+            if existing:
+                return AppointmentQuery.error("Appointment already exists", status="error")
+
+            # Create appointment
+            appointment = Appointment(**parameters)
+            inserted = await AppointmentService.create_appointment(db, appointment)
+
+            # Initialize duration fields
+            call_duration_minutes = 0.0
+            call_duration_seconds = 0
+
+            # Check if call log exists (relevant for calls, not chats)
+            existing_log = await db.callslog.find_one({"call_id": call_id})
+            if existing_log and source == "book_call":
+                call_duration_minutes = existing_log.get("call_duration_minutes", 0.0)
+                call_duration_seconds = existing_log.get("call_duration_seconds", 0)
+
+            # Update appointment with duration (0 for chats)
             await db.appointments.update_one(
                 {"call_id": call_id},
                 {"$set": {
-                    "call_duration_seconds": existing_log["call_duration_seconds"],
-                    "call_duration_minutes": existing_log["call_duration_minutes"]
+                    "call_duration_seconds": call_duration_seconds,
+                    "call_duration_minutes": call_duration_minutes
                 }}
             )
 
-            # Push to Make.com now that we have both
-            await WebhookService.push_booking_to_make({
+            # Prepare data for Make.com push
+            booking_data = {
                 "patient_email": inserted.get("patient_email"),
                 "patient_name": inserted.get("patient_name"),
                 "doctor_name": inserted.get("doctor_name"),
                 "appointment_time": inserted.get("appointment_time").isoformat()
                 if inserted.get("appointment_time") else None,
                 "source": inserted.get("source"),
-                "call_duration_minutes": existing_log["call_duration_minutes"]
-            })
+            }
+            # Only include call_duration_minutes for call-based bookings
+            if source == "book_call":
+                booking_data["call_duration_minutes"] = call_duration_minutes
 
-        # Note: If no log yet, don't push here—handle_end_of_call will do it when it arrives
-        return AppointmentQuery.appointment_booked(
-            inserted["patient_name"], inserted["doctor_name"], inserted["id"]
-        )
+            # Push to Make.com
+            await WebhookService.push_booking_to_make(booking_data)
+
+            return AppointmentQuery.appointment_booked(
+                inserted["patient_name"], inserted["doctor_name"], inserted["id"]
+            )
+
+        except Exception as e:
+            logger.exception(f"Error in handle_tool_call: {str(e)}")
+            return AppointmentQuery.error(f"Processing error: {str(e)}", status="error")
 
     # ---------- EXTERNAL PUSH HELPERS ----------
     @staticmethod
@@ -234,3 +275,4 @@ class WebhookService:
         if MAKE_BOOKING_WEBHOOK_URL:
             async with httpx.AsyncClient() as client:
                 await client.post(MAKE_BOOKING_WEBHOOK_URL, json=data)
+
