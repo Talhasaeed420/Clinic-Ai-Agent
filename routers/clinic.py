@@ -96,6 +96,18 @@ async def handle_vapi_webhook(request: Request):
         return AppointmentQuery.error(str(e), status="error")
 
 
+@router.post("/webhook/call-start")
+async def handle_call_start_webhook(request: Request):
+    db: AsyncIOMotorDatabase = await get_database(request)
+    body = await request.json()
+    try:
+        response = await WebhookService.handle_call_start(db, body)
+        return response
+    except Exception as e:
+        logger.exception(f"Error processing call start webhook: {str(e)}")
+        return AppointmentQuery.error(str(e), status="error")
+
+
 # ---------------- Booking ---------------- #
 @router.post("/bookings")
 async def handle_vapi_tool_call(request: Request):

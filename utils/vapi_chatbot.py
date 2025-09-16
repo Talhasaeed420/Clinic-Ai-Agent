@@ -1,4 +1,3 @@
-# utils/vapi_chatbot.py
 import os
 import json
 from datetime import datetime
@@ -58,7 +57,8 @@ def _extract_reply_and_tool(data: Dict[str, Any]) -> Tuple[Optional[str], Option
     return reply_text, tool_call
 
 
-async def send_message(user_id: str, assistant_id: str, user_input: str, db):
+# 🔹 Signature fixed: assistant_id before user_input, email last
+async def send_message(user_id: str, assistant_id: str, user_input: str, db, email: Optional[str] = None):
     headers = {
         "Authorization": f"Bearer {VAPI_API_KEY}",
         "Content-Type": "application/json",
@@ -74,7 +74,7 @@ async def send_message(user_id: str, assistant_id: str, user_input: str, db):
     if existing_chat:
         payload["previousChatId"] = existing_chat["chat_id"]
 
-    # Call VAPI (plaintext for the AI)
+    # Call VAPI
     async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, read=20.0, connect=10.0)) as client:
         resp = await client.post(VAPI_CHAT_BASE_URL, json=payload, headers=headers)
         if resp.status_code >= 400:
@@ -88,16 +88,19 @@ async def send_message(user_id: str, assistant_id: str, user_input: str, db):
     if not chat_id:
         return {"error": "No chatId returned from VAPI", "raw": data}
 
-    # Extract assistant reply and/or tool info safely
+    # Extract assistant reply
     reply_text, tool_call = _extract_reply_and_tool(data)
 
-    # Build messages for storage (encrypt only for DB)
-    user_msg = {"role": "user", "con tent": user_input}
+    # Build messages for storage
+    user_msg = {"role": "user", "content": user_input}
     assistant_msg = {"role": "assistant", "content": reply_text or ""}
     if tool_call:
         assistant_msg["content"] = f"[Tool Call] {tool_call.get('toolName')} with params {tool_call.get('parameters')}"
 
-    encrypted_messages = [encrypt_field(json.dumps(user_msg)), encrypt_field(json.dumps(assistant_msg))]
+    encrypted_messages = [
+        encrypt_field(json.dumps(user_msg)),
+        encrypt_field(json.dumps(assistant_msg)),
+    ]
 
     async def _persist():
         try:
@@ -106,7 +109,11 @@ async def send_message(user_id: str, assistant_id: str, user_input: str, db):
                 await db.chats.update_one(
                     {"_id": existing_chat["_id"]},
                     {
-                        "$set": {"chat_id": chat_id, "updated_at": now},
+                        "$set": {
+                            "chat_id": chat_id,
+                            "updated_at": now,
+                            "email": email,  # 🔹 keep email updated
+                        },
                         "$push": {"messages": {"$each": encrypted_messages}},
                     },
                 )
@@ -114,6 +121,7 @@ async def send_message(user_id: str, assistant_id: str, user_input: str, db):
                 await db.chats.insert_one(
                     {
                         "user_id": user_id,
+                        "email": email,  # 🔹 store email on first insert
                         "chat_id": chat_id,
                         "messages": encrypted_messages,
                         "created_at": now,
