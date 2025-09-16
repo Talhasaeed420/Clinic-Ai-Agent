@@ -1,38 +1,51 @@
-# dependencies/auth.py
+import jwt
+from datetime import datetime, timedelta, timezone
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional
+from services.admin_service import AdminService
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from database import get_database
+import os
+from dotenv import load_dotenv
 
-# This is a SIMPLE example. You MUST make this stronger for production.
-# For a real app, you would validate a JWT token here and check the user's role from a database.
+load_dotenv()
+
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", 30))
 
 security = HTTPBearer()
 
-# Placeholder function - YOU MUST REPLACE THIS WITH REAL AUTH LOGIC
-def get_current_admin_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
-    """
-    Dependency to get the current user and verify they are an admin.
-    This is a placeholder. You need to implement real JWT validation here.
-    """
-    # VERY BASIC CHECK - REPLACE THIS!
-    # Imagine your admin token is "secret-admin-token"
-    if credentials.credentials == "admin":
-        # If the token matches, return a dummy admin user object
-        return {"username": "admin", "role": "admin"}
-    else:
-        # This is where you would verify a real JWT and check the 'role' claim
-        # For now, we just raise an exception if the simple token doesn't match
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired authentication credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+async def get_current_admin_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Get the current admin from JWT and verify existence."""
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
-    # # Example of what a JWT check might look like (pseudo-code):
-    # try:
-    #     payload = jwt.decode(credentials.credentials, "YOUR-JWT-SECRET", algorithms=["HS256"])
-    #     if payload.get("role") != "admin":
-    #         raise HTTPException(status_code=403, detail="Not enough permissions")
-    #     return payload
-    # except jwt.InvalidTokenError:
-    #     raise HTTPException(status_code=401, detail="Invalid token")
+    admin = await AdminService.get_admin_by_username(db, username)
+    if admin is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enough permissions")
+
+    return admin
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    """Create a JWT access token."""
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+    return encoded_jwt
