@@ -1,7 +1,7 @@
 from log_config.logging_config import setup_logging
 setup_logging()
 from fastapi import FastAPI
-from routers import clinic, call_center, bot_clinic, doctors_data, bot_tools, vapi_chat,vapi_metric, admin
+from routers import clinic, call_center, bot_clinic, doctors_data, bot_tools, vapi_chat,vapi_metric, admin, users
 from database import lifespan
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -10,11 +10,13 @@ app = FastAPI(lifespan=lifespan)
 # ✅ Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # you can restrict later e.g. ["http://localhost:5173"]
+    allow_origins=["*"],  # or your React URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+from routers.auth import router as auth_router
+app.include_router(auth_router)
 
 # Routers
 app.include_router(clinic.router, tags=["Clinic"])
@@ -25,3 +27,4 @@ app.include_router(bot_tools.router, tags=["Bot Tools"])
 app.include_router(vapi_chat.router, tags=["VAPI Chat"])
 app.include_router(vapi_metric.router, tags=["VAPI Metrics"])
 app.include_router(admin.router, tags=["Admin"])
+app.include_router(users.router, tags=["Users"])
