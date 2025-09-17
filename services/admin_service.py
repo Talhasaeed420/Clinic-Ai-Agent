@@ -146,6 +146,7 @@ class AdminService:
                     "_id": 1,
                     "patient_name": 1,
                     "doctor_name": 1,
+                    "patient_email": 1,  
                     "appointment_time": 1,
                     "created_at": 1,
                 },
