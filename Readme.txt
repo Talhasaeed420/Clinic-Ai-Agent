@@ -143,7 +143,7 @@ What services files doing?
 services/admin_service.py ---> that is decrypting the data only for authorized always remember dont use it for anyone(sensitive)
 services/appointment_service -----> creating, updating , deleting appointments functions used by vapi 
 services/webhook_service.py ---->  handling end of tool, handling end of call report and saving in database , saving data in make.com
-
+service/user-service ------> For admin Authentication
 
 ----------------------------------------------------------------
 What vapi-voice-trans doin?
@@ -162,7 +162,7 @@ clinic.py ------> main file for creating , updating , deleting , webhook and boo
 doctor_data.py ---->  add,update, delete doctor data 
 vapi_chat.py ------> if someone wants to make a ui of chat bot use this endpoint to talk to vapi
 vapi_metrics.py ----> use this api to get the cost of vapi 
-
+user.py ---> FOr user Authentication
 
 
 
